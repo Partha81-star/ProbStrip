@@ -2,12 +2,42 @@ import torch
 import torch.nn as nn
 
 
+class StripConv2d(nn.Module):
+    def __init__(self, in_channels, out_channels, kernel_size=7):
+        super(StripConv2d, self).__init__()
+        padding = kernel_size // 2
+        self.conv_h = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=(1, kernel_size),
+            padding=(0, padding),
+            bias=False,
+        )
+        self.conv_v = nn.Conv2d(
+            in_channels,
+            out_channels,
+            kernel_size=(kernel_size, 1),
+            padding=(padding, 0),
+            bias=False,
+        )
+        self.fusion = nn.Conv2d(
+            out_channels * 2, out_channels, kernel_size=1, bias=False
+        )
+        self.bn = nn.BatchNorm2d(out_channels)
+        self.act = nn.ReLU(inplace=True)
+
+    def forward(self, x):
+        x_h = self.conv_h(x)
+        x_v = self.conv_v(x)
+        x_cat = torch.cat([x_h, x_v], dim=1)
+        out = self.fusion(x_cat)
+        out = self.bn(out)
+        return self.act(out)
+
+
 class MultiScaleStripConv2d(nn.Module):
     def __init__(self, in_channels, out_channels, kernel_sizes=(5, 9, 13)):
         super(MultiScaleStripConv2d, self).__init__()
-        if isinstance(kernel_sizes, int):
-            kernel_sizes = (5, kernel_sizes, kernel_sizes + 4)
-
         self.kernel_sizes = kernel_sizes
         self.h_convs = nn.ModuleList()
         self.v_convs = nn.ModuleList()
@@ -50,15 +80,6 @@ class MultiScaleStripConv2d(nn.Module):
         fused = self.fusion(cat_out)
         out = self.bn(fused)
         return self.act(out)
-
-
-class StripConv2d(MultiScaleStripConv2d):
-    def __init__(self, in_channels, out_channels, kernel_size=7):
-        if isinstance(kernel_size, (list, tuple)):
-            ks = tuple(kernel_size)
-        else:
-            ks = (5, 9, 13) if kernel_size == 7 else (5, kernel_size, kernel_size + 4)
-        super(StripConv2d, self).__init__(in_channels, out_channels, kernel_sizes=ks)
 
 
 class StripConvBlock(nn.Module):
