@@ -23,8 +23,7 @@ from training.metrics import (
 
 
 st.set_page_config(
-    page_title="ProbStrip - Interpretable Medical Image Segmentation",
-    page_icon="🔬",
+    page_title="ProbStrip Studio",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -33,24 +32,27 @@ st.markdown(
     """
     <style>
     .main-header {
-        font-size: clamp(1.6rem, 4vw, 2.4rem);
+        font-size: clamp(1.8rem, 4vw, 2.5rem);
         font-weight: 800;
-        color: #f8fafc;
+        color: #0f172a;
         margin-bottom: 0.2rem;
         line-height: 1.2;
+        letter-spacing: -0.02em;
     }
     .sub-header {
         font-size: clamp(0.85rem, 2vw, 1.05rem);
-        color: #94a3b8;
-        margin-bottom: 1.2rem;
+        color: #475569;
+        margin-bottom: 1.5rem;
         line-height: 1.4;
+        font-weight: 400;
     }
-    .metric-card {
-        background: rgba(30, 41, 59, 0.7);
-        border: 1px solid rgba(148, 163, 184, 0.15);
-        border-radius: 12px;
-        padding: 12px;
-        margin-bottom: 8px;
+    @media (prefers-color-scheme: dark) {
+        .main-header {
+            color: #f8fafc;
+        }
+        .sub-header {
+            color: #94a3b8;
+        }
     }
     @media (max-width: 768px) {
         .stButton>button {
@@ -99,7 +101,7 @@ def get_default_dataset_paths():
 
 
 def main():
-    st.markdown('<div class="main-header">🔬 ProbStrip Studio</div>', unsafe_allow_html=True)
+    st.markdown('<div class="main-header">ProbStrip Studio</div>', unsafe_allow_html=True)
     st.markdown(
         '<div class="sub-header">Interpretable Medical Image Segmentation with Probabilistic Strip-CNNs & Monte Carlo Uncertainty Quantification</div>',
         unsafe_allow_html=True,
@@ -112,25 +114,25 @@ def main():
         app_mode = st.radio(
             "Select Section",
             [
-                "🔍 Single-Scan UQ Diagnostics",
-                "📹 Live Camera / Scan Analysis",
-                "🚀 Extended Training Manager",
-                "📊 Batch Evaluation & Report Export",
+                "Single-Scan Diagnostics",
+                "Live Camera Analysis",
+                "Training Manager",
+                "Batch Evaluation",
             ],
             index=0,
             label_visibility="collapsed",
         )
 
         st.divider()
-        st.markdown(f"**Hardware Engine**: `{device.upper()}`")
-        st.markdown(f"**Default Weights**: `checkpoints/latest_model.pth`")
+        st.markdown(f"**Compute Device**: `{device.upper()}`")
+        st.markdown(f"**Model Checkpoint**: `checkpoints/latest_model.pth`")
 
-    if app_mode == "🔍 Single-Scan UQ Diagnostics":
+    if app_mode == "Single-Scan Diagnostics":
         st.subheader("Single-Scan Diagnostics & Uncertainty Quantification")
 
         default_images, default_mask_dir = get_default_dataset_paths()
 
-        with st.expander("⚙️ Inference Hyperparameters", expanded=False):
+        with st.expander("Inference Parameters", expanded=False):
             exp_col1, exp_col2, exp_col3 = st.columns(3)
             with exp_col1:
                 num_samples = st.slider("MC Passes (N)", 1, 50, 15, step=1)
@@ -183,7 +185,7 @@ def main():
                 if uploaded_mask is not None:
                     mask_bytes = uploaded_mask.read()
 
-        run_diag = st.button("⚡ Run Stochastic Inference", type="primary", use_container_width=True)
+        run_diag = st.button("Run Stochastic Inference", type="primary", use_container_width=True)
 
         if "current_image_key" not in st.session_state:
             st.session_state["current_image_key"] = None
@@ -302,15 +304,15 @@ def main():
                 st.image(var_color_rgb, caption="3. Epistemic Uncertainty (Variance)", use_container_width=True)
 
             with c4:
-                st.image(flag_overlay, caption="4. Low-Confidence Flagged Warning (Red)", use_container_width=True)
+                st.image(flag_overlay, caption="4. Low-Confidence Warning (Red)", use_container_width=True)
 
-    elif app_mode == "📹 Live Camera / Scan Analysis":
-        st.subheader("Live Camera Capture & Real-Time Analysis")
+    elif app_mode == "Live Camera Analysis":
+        st.subheader("Live Camera Capture & Analysis")
 
         if "webcam_history" not in st.session_state:
             st.session_state["webcam_history"] = []
 
-        with st.expander("⚙️ Camera Inference Settings", expanded=False):
+        with st.expander("Camera Parameters", expanded=False):
             cam_s1, cam_s2, cam_s3, cam_s4 = st.columns(4)
             with cam_s1:
                 cam_mc_passes = st.slider("MC Passes", 5, 30, 10, step=5, key="cam_mc")
@@ -327,7 +329,7 @@ def main():
             cam_unc_thresh = 0.02
             cam_checkpoint = "checkpoints/latest_model.pth"
 
-        camera_image = st.camera_input("Take a photo of medical scan or X-ray")
+        camera_image = st.camera_input("Capture Scan via Camera")
 
         if camera_image is not None:
             cam_bytes = camera_image.getvalue()
@@ -372,23 +374,23 @@ def main():
                 low_conf_ratio = float(np.mean(cam_low_conf))
 
                 st.divider()
-                st.subheader("Live Capture Diagnostics")
+                st.subheader("Analysis Metrics")
 
                 mc1, mc2, mc3, mc4 = st.columns(4)
                 mc1.metric("Foreground Coverage", f"{foreground_ratio * 100:.1f}%")
                 mc2.metric("Mean Variance", f"{mean_variance:.6f}")
                 mc3.metric("Max Variance", f"{max_variance:.6f}")
-                mc4.metric("Low-Conf Ratio", f"{low_conf_ratio * 100:.1f}%")
+                mc4.metric("Low-Confidence Ratio", f"{low_conf_ratio * 100:.1f}%")
 
                 vc1, vc2, vc3, vc4 = st.columns(4)
                 with vc1:
                     st.image(captured_frame, caption="1. Captured Scan", use_container_width=True)
                 with vc2:
-                    st.image((cam_mean * 255).astype(np.uint8), caption="2. Probabilistic Mean Mask", use_container_width=True)
+                    st.image((cam_mean * 255).astype(np.uint8), caption="2. Probabilistic Mask", use_container_width=True)
                 with vc3:
-                    st.image(cam_var_rgb, caption="3. Epistemic Uncertainty", use_container_width=True)
+                    st.image(cam_var_rgb, caption="3. Uncertainty Heatmap", use_container_width=True)
                 with vc4:
-                    st.image(cam_overlay, caption="4. Flagged Warnings (Red)", use_container_width=True)
+                    st.image(cam_overlay, caption="4. Low-Confidence Warning (Red)", use_container_width=True)
 
                 timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
                 st.session_state["webcam_history"].append({
@@ -404,26 +406,26 @@ def main():
 
         if st.session_state["webcam_history"]:
             st.divider()
-            st.subheader("Webcam Session Capture History")
+            st.subheader("Session History")
             hist_df = pd.DataFrame(st.session_state["webcam_history"])
             st.dataframe(hist_df, use_container_width=True)
 
             hist_csv = io.StringIO()
             hist_df.to_csv(hist_csv, index=False)
             st.download_button(
-                label="📥 Download Session Report CSV",
+                label="Download Session Report (CSV)",
                 data=hist_csv.getvalue(),
                 file_name=f"probstrip_session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
                 mime="text/csv",
                 use_container_width=True,
             )
 
-            if st.button("🗑️ Clear History", use_container_width=True):
+            if st.button("Clear History", use_container_width=True):
                 st.session_state["webcam_history"] = []
                 st.rerun()
 
-    elif app_mode == "🚀 Extended Training Manager":
-        st.subheader("Extended Training Manager")
+    elif app_mode == "Training Manager":
+        st.subheader("Model Training Manager")
         col_t1, col_t2 = st.columns(2)
 
         with col_t1:
@@ -441,13 +443,13 @@ def main():
                 value=1e-3,
                 format_func=lambda x: f"{x:.0e}",
             )
-            save_checkpoint_dir = st.text_input("Checkpoint Save Directory", value="checkpoints")
+            save_checkpoint_dir = st.text_input("Checkpoint Directory", value="checkpoints")
 
-        start_training = st.button("🚀 Start Training Routine", type="primary", use_container_width=True)
+        start_training = st.button("Start Training", type="primary", use_container_width=True)
 
         if start_training:
             os.makedirs(save_checkpoint_dir, exist_ok=True)
-            st.info("Initializing dataset & dataloaders...")
+            st.info("Initializing dataset and dataloaders...")
 
             default_images, default_mask_dir = get_default_dataset_paths()
 
@@ -524,7 +526,7 @@ def main():
 
                 prog_bar.progress((epoch + 1) / epochs)
                 status_text.markdown(
-                    f"**Epoch {epoch + 1}/{epochs}** — Loss: `{avg_loss:.4f}` | Mean DSC: `{avg_dsc:.4f}`"
+                    f"**Epoch {epoch + 1}/{epochs}** — Loss: `{avg_loss:.4f}` | DSC: `{avg_dsc:.4f}`"
                 )
 
                 df_metrics = pd.DataFrame({"BCEDice Loss": history_losses, "Train DSC": history_dsc})
@@ -532,32 +534,32 @@ def main():
 
             save_path = os.path.join(save_checkpoint_dir, "latest_model.pth")
             torch.save({"model_state_dict": model.state_dict()}, save_path)
-            st.success(f"✅ Training completed! Model saved to `{save_path}`")
+            st.success(f"Training completed. Model saved to `{save_path}`")
             get_cached_model.clear()
 
-    elif app_mode == "📊 Batch Evaluation & Report Export":
-        st.subheader("Batch Dataset Evaluation & Report Generation")
+    elif app_mode == "Batch Evaluation":
+        st.subheader("Batch Evaluation & Reporting")
 
         col_b1, col_b2 = st.columns(2)
         with col_b1:
             batch_dir = st.text_input(
-                "Evaluation Dataset Directory",
+                "Dataset Directory",
                 value=r"C:\Users\parth\Documents\Prob-strip-dataset",
             )
         with col_b2:
-            batch_samples = st.slider("MC Passes for Batch Testing", 5, 30, 10, step=5)
+            batch_samples = st.slider("MC Passes", 5, 30, 10, step=5)
 
-        run_batch = st.button("📊 Run Batch Evaluation", type="primary", use_container_width=True)
+        run_batch = st.button("Run Batch Evaluation", type="primary", use_container_width=True)
 
         if run_batch:
             img_dir = os.path.join(batch_dir, "Images")
             mask_dir = os.path.join(batch_dir, "Masks")
 
             if not os.path.exists(img_dir):
-                st.error(f"Images folder not found at: {img_dir}")
+                st.error(f"Images directory not found at: {img_dir}")
             else:
                 image_files = sorted(glob.glob(os.path.join(img_dir, "*.jpg")) + glob.glob(os.path.join(img_dir, "*.png")))
-                st.info(f"Found {len(image_files)} test scans. Executing stochastic inference...")
+                st.info(f"Found {len(image_files)} scans. Executing stochastic inference...")
 
                 model = get_cached_model("checkpoints/latest_model.pth", device)
                 engine = StochasticInferenceEngine(
@@ -615,13 +617,13 @@ def main():
                 sc3.metric("Average ECE", f"{df_results['Calibration Error (ECE)'].mean():.4f}")
                 sc4.metric("Average Epistemic Variance", f"{df_results['Mean Epistemic Variance'].mean():.6f}")
 
-                st.subheader("Per-Image Benchmark Results")
+                st.subheader("Per-Image Results")
                 st.dataframe(df_results, use_container_width=True)
 
                 csv_buffer = io.StringIO()
                 df_results.to_csv(csv_buffer, index=False)
                 st.download_button(
-                    label="📥 Download Full Evaluation CSV Report",
+                    label="Download Full Evaluation Report (CSV)",
                     data=csv_buffer.getvalue(),
                     file_name="probstrip_evaluation_report.csv",
                     mime="text/csv",
