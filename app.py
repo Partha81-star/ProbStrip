@@ -1,29 +1,40 @@
-import glob
-import io
+import hashlib
 import os
-import time
-from datetime import datetime
+from pathlib import Path
+
 import cv2
 import numpy as np
 import pandas as pd
 import streamlit as st
 import torch
-from torch.utils.data import DataLoader
 
-from data.dataset import ElongatedStructureDataset
+from clinical.analysis import (
+    build_visuals,
+    calculate_research_measures,
+    model_input_channel,
+    resize_scan,
+    review_outcome,
+)
+from clinical.quality import assess_image_quality
+from clinical.reporting import (
+    make_case_id,
+    make_report_payload,
+    report_as_fhir,
+    report_as_html,
+    report_as_json,
+)
 from data.preprocessing import MedicalImagePreprocessor
 from inference.mc_dropout_inference import StochasticInferenceEngine
 from models.probabilistic_unet import ProbabilisticUNet
-from training.losses import BCEDiceLoss
-from training.metrics import (
-    dice_similarity_coefficient,
-    expected_calibration_error,
-    intersection_over_union,
-)
 
+
+APP_ROOT = Path(__file__).resolve().parent
+DEFAULT_CHECKPOINT = APP_ROOT / "checkpoints" / "latest_model.pth"
+DEMO_IMAGE = APP_ROOT / "test_results" / "Image_14L_input.png"
 
 st.set_page_config(
-    page_title="ProbStrip Studio",
+    page_title="ProbStrip Retinal Review",
+    page_icon="PS",
     layout="wide",
     initial_sidebar_state="expanded",
 )
@@ -31,36 +42,31 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    .main-header {
-        font-size: clamp(1.8rem, 4vw, 2.5rem);
-        font-weight: 800;
-        color: #0f172a;
-        margin-bottom: 0.2rem;
-        line-height: 1.2;
-        letter-spacing: -0.02em;
-    }
-    .sub-header {
-        font-size: clamp(0.85rem, 2vw, 1.05rem);
-        color: #475569;
-        margin-bottom: 1.5rem;
-        line-height: 1.4;
-        font-weight: 400;
-    }
+    :root { --ink:#17202a; --muted:#5f6b76; --teal:#0f766e; --amber:#b45309; }
+    .block-container { max-width: 1180px; padding-top: 1.6rem; padding-bottom: 3rem; }
+    h1, h2, h3 { letter-spacing: 0; color: var(--ink); }
+    .brand { font-size: 1.55rem; font-weight: 750; color: var(--ink); margin-bottom: .15rem; }
+    .brand-sub { color: var(--muted); margin-bottom: 1.3rem; }
+    .safety-bar { border-left: 5px solid var(--amber); background:#fff7ed; padding: .8rem 1rem; margin: .4rem 0 1.3rem; }
+    .result-ready { border-left: 5px solid #0f766e; background:#ecfdf5; padding: 1rem; }
+    .result-review { border-left: 5px solid #d97706; background:#fffbeb; padding: 1rem; }
+    .result-retake { border-left: 5px solid #b91c1c; background:#fef2f2; padding: 1rem; }
+    .plain-note { color:var(--muted); font-size:.92rem; }
+    [data-testid="stMetric"] { border-top: 2px solid #d7e3e1; padding-top: .65rem; }
+    [data-testid="stSidebar"] { background:#f7faf9; }
+    .stButton > button, .stDownloadButton > button { border-radius:6px; min-height:2.65rem; }
     @media (prefers-color-scheme: dark) {
-        .main-header {
-            color: #f8fafc;
-        }
-        .sub-header {
-            color: #94a3b8;
-        }
+      h1, h2, h3, .brand { color:#f4f7f6; }
+      .brand-sub, .plain-note { color:#b4c0bc; }
+      .safety-bar { background:#422006; }
+      .result-ready { background:#052e2b; }
+      .result-review { background:#422006; }
+      .result-retake { background:#450a0a; }
+      [data-testid="stSidebar"] { background:#111917; }
     }
-    @media (max-width: 768px) {
-        .stButton>button {
-            width: 100% !important;
-        }
-        .stSelectbox, .stSlider {
-            margin-bottom: 8px;
-        }
+    @media (max-width: 720px) {
+      .block-container { padding-top: 1rem; }
+      .stButton > button, .stDownloadButton > button { width:100%; }
     }
     </style>
     """,
@@ -68,567 +74,520 @@ st.markdown(
 )
 
 
-@st.cache_resource
-def get_cached_model(checkpoint_path, device, in_channels=1, out_channels=1, strip_kernel_size=7):
+PATIENT_TEXT = {
+    "English": {
+        "no_diagnosis": "No diagnosis was generated",
+        "no_diagnosis_body": (
+            "ProbStrip maps visible blood vessels and marks places where the software "
+            "is unsure. It cannot tell whether you have an eye disease."
+        ),
+        "ready": "Vessel map ready for clinician review",
+        "review": "Clinician review is especially important",
+        "retake": "A clearer retinal image is needed",
+        "next": "What to do next",
+        "ready_body": (
+            "The software produced a vessel map with limited flagged uncertainty. "
+            "Only a qualified clinician can interpret what it means for your health."
+        ),
+        "ready_next": "Discuss the image during your normal eye-care appointment.",
+        "review_body": (
+            "The model was unsure in a noticeable part of the image. Amber areas "
+            "show where its vessel map needs closer review."
+        ),
+        "review_next": "Share the original image and this report with an eye-care professional.",
+        "retake_body": (
+            "The capture-quality check found issues that can make the vessel map "
+            "unreliable. This result should not be interpreted clinically."
+        ),
+        "retake_next": "Ask the imaging professional to repeat the retinal photograph.",
+    },
+    "Hindi": {
+        "no_diagnosis": "कोई निदान तैयार नहीं किया गया",
+        "no_diagnosis_body": (
+            "ProbStrip दिखाई देने वाली रक्त वाहिकाओं का नक्शा बनाता है और उन स्थानों "
+            "को चिन्हित करता है जहां सॉफ्टवेयर अनिश्चित है। यह आंख की बीमारी का निदान नहीं करता।"
+        ),
+        "ready": "रक्त वाहिका मानचित्र डॉक्टर की समीक्षा के लिए तैयार है",
+        "review": "डॉक्टर द्वारा समीक्षा विशेष रूप से जरूरी है",
+        "retake": "रेटिना की अधिक स्पष्ट तस्वीर की जरूरत है",
+        "next": "अब क्या करें",
+        "ready_body": (
+            "सॉफ्टवेयर ने सीमित अनिश्चितता के साथ रक्त वाहिकाओं का नक्शा बनाया है। "
+            "केवल योग्य डॉक्टर ही आपके स्वास्थ्य के लिए इसका अर्थ बता सकते हैं।"
+        ),
+        "ready_next": "अपनी नियमित आंखों की जांच में डॉक्टर से इस तस्वीर पर चर्चा करें।",
+        "review_body": (
+            "मॉडल तस्वीर के एक महत्वपूर्ण हिस्से में अनिश्चित था। नारंगी भाग दिखाते हैं "
+            "कि डॉक्टर को कहां अधिक ध्यान से समीक्षा करनी चाहिए।"
+        ),
+        "review_next": "मूल तस्वीर और यह रिपोर्ट आंखों के डॉक्टर को दिखाएं।",
+        "retake_body": (
+            "तस्वीर की गुणवत्ता में ऐसी समस्याएं मिलीं जो रक्त वाहिका मानचित्र को "
+            "अविश्वसनीय बना सकती हैं। इस परिणाम की चिकित्सकीय व्याख्या न करें।"
+        ),
+        "retake_next": "इमेजिंग पेशेवर से रेटिना की तस्वीर दोबारा लेने को कहें।",
+    },
+}
+
+
+@st.cache_resource(show_spinner=False)
+def load_model(checkpoint_path: str, device: str):
+    path = Path(checkpoint_path)
+    if not path.is_file():
+        raise FileNotFoundError(
+            f"The trained model was not found at {path}. No prediction was made."
+        )
+
     model = ProbabilisticUNet(
-        in_channels=in_channels,
-        out_channels=out_channels,
+        in_channels=1,
+        out_channels=1,
         features=[32, 64, 128, 256],
-        strip_kernel_size=strip_kernel_size,
+        strip_kernel_size=7,
         dropout_prob=0.2,
     ).to(device)
-
-    if os.path.exists(checkpoint_path):
-        checkpoint = torch.load(checkpoint_path, map_location=device)
-        if isinstance(checkpoint, dict) and "model_state_dict" in checkpoint:
-            model.load_state_dict(checkpoint["model_state_dict"])
-        elif isinstance(checkpoint, dict):
-            model.load_state_dict(checkpoint)
+    checkpoint = torch.load(path, map_location=device, weights_only=True)
+    state_dict = checkpoint.get("model_state_dict", checkpoint)
+    model.load_state_dict(state_dict, strict=True)
     model.eval()
     return model
 
 
-@st.cache_data
-def get_default_dataset_paths():
-    default_base = r"C:\Users\parth\Documents\Prob-strip-dataset"
-    img_dir = os.path.join(default_base, "Images")
-    mask_dir = os.path.join(default_base, "Masks")
-
-    if os.path.exists(img_dir):
-        images = sorted(glob.glob(os.path.join(img_dir, "*.jpg")) + glob.glob(os.path.join(img_dir, "*.png")))
-        return images, mask_dir
-    return [], ""
+def decode_image(image_bytes: bytes):
+    encoded = np.frombuffer(image_bytes, np.uint8)
+    bgr = cv2.imdecode(encoded, cv2.IMREAD_COLOR)
+    if bgr is None:
+        raise ValueError("This file could not be read as an image.")
+    return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
-def main():
-    st.markdown('<div class="main-header">ProbStrip Studio</div>', unsafe_allow_html=True)
+def run_analysis(rgb_image, settings):
+    display = resize_scan(rgb_image)
+    quality = assess_image_quality(display)
+    empty_measures = {
+        "visible_vessel_coverage_percent": 0.0,
+        "central_vessel_coverage_percent": 0.0,
+        "low_confidence_area_percent": 100.0,
+        "mean_model_variance": 0.0,
+        "maximum_model_variance": 0.0,
+    }
+
+    if quality.status == "Retake recommended":
+        outcome = review_outcome(quality.status, 100.0)
+        return {
+            "quality": quality,
+            "outcome": outcome,
+            "measures": empty_measures,
+            "display": display,
+            "prediction": None,
+        }
+
+    channel = model_input_channel(display)
+    tensor = MedicalImagePreprocessor(use_clahe=True, norm_mode="minmax").process(
+        channel
+    )
+    model = load_model(settings["checkpoint"], settings["device"])
+    engine = StochasticInferenceEngine(
+        model=model,
+        num_samples=settings["mc_samples"],
+        decision_threshold=settings["decision_threshold"],
+        uncertainty_threshold=settings["uncertainty_threshold"],
+        device=settings["device"],
+    )
+    result = engine.predict_stochastic(tensor)
+    mean_prediction = result["mean_prediction"].squeeze().cpu().numpy()
+    variance_map = result["variance_map"].squeeze().cpu().numpy()
+    binary, uncertain, overlay, heat = build_visuals(
+        display,
+        mean_prediction,
+        variance_map,
+        settings["decision_threshold"],
+        settings["uncertainty_threshold"],
+    )
+    measures = calculate_research_measures(display, binary, uncertain, variance_map)
+    outcome = review_outcome(
+        quality.status, measures["low_confidence_area_percent"]
+    )
+    return {
+        "quality": quality,
+        "outcome": outcome,
+        "measures": measures,
+        "display": display,
+        "prediction": mean_prediction,
+        "variance": variance_map,
+        "binary": binary,
+        "uncertain": uncertain,
+        "overlay": overlay,
+        "heat": heat,
+    }
+
+
+def quality_table(quality):
+    rows = []
+    for check in quality.checks:
+        rows.append(
+            {
+                "Capture check": check.name,
+                "Measured value": f"{check.value:.1f} {check.unit}",
+                "Result": check.status,
+                "How to improve": check.guidance,
+            }
+        )
+    return pd.DataFrame(rows)
+
+
+def render_patient_result(case, language):
+    text = PATIENT_TEXT[language]
+    outcome = case["outcome"]
+    translated_title = text.get(outcome["level"], outcome["title"])
+    translated_body = text[f'{outcome["level"]}_body']
+    translated_next = text[f'{outcome["level"]}_next']
     st.markdown(
-        '<div class="sub-header">Interpretable Medical Image Segmentation with Probabilistic Strip-CNNs & Monte Carlo Uncertainty Quantification</div>',
+        f'<div class="safety-bar"><strong>{text["no_diagnosis"]}</strong><br>'
+        f'{text["no_diagnosis_body"]}</div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        f'<div class="result-{outcome["level"]}"><strong>{translated_title}</strong>'
+        f'<br>{translated_body}<br><br><strong>{text["next"]}:</strong> '
+        f'{translated_next}</div>',
         unsafe_allow_html=True,
     )
 
+    st.subheader("Your report", anchor=False)
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Image quality", f"{case['quality'].score}/100")
+    if case["prediction"] is None:
+        m2.metric("Vessel map", "Not created")
+        m3.metric("Software confidence", "Not available")
+    else:
+        m2.metric(
+            "Visible vessel coverage",
+            f"{case['measures']['visible_vessel_coverage_percent']:.1f}%",
+            help="The share of the visible retinal field marked as vessel by the model. This is not a disease score.",
+        )
+        m3.metric(
+            "Area needing review",
+            f"{case['measures']['low_confidence_area_percent']:.1f}%",
+            help="The share of the image where repeated model passes disagreed.",
+        )
+
+    report_tab, image_tab, quality_tab = st.tabs(
+        ["What this means", "Your images", "Image-quality details"]
+    )
+    with report_tab:
+        st.markdown("**What the numbers mean**")
+        st.write(
+            "Visible vessel coverage describes the software's vessel map. Area needing "
+            "review describes the software's uncertainty. Neither number says whether "
+            "your eye is healthy or unhealthy."
+        )
+        st.markdown("**When to seek care**")
+        st.write(
+            "Do not wait for this report if you have sudden vision loss, severe eye pain, "
+            "new flashes or many new floaters. Contact a healthcare professional promptly."
+        )
+    with image_tab:
+        if case["prediction"] is None:
+            st.image(case["display"], caption="Uploaded retinal image", width="stretch")
+            st.info("A vessel map was not created because the image-quality gate stopped analysis.")
+        else:
+            left, right = st.columns(2)
+            left.image(
+                case["display"], caption="Original retinal image", width="stretch"
+            )
+            right.image(
+                case["overlay"],
+                caption="Teal: mapped vessels. Amber: areas needing review.",
+                width="stretch",
+            )
+    with quality_tab:
+        st.write(case["quality"].summary)
+        st.dataframe(quality_table(case["quality"]), hide_index=True, width="stretch")
+
+    st.subheader("Take this report to your clinician", anchor=False)
+    d1, d2 = st.columns(2)
+    d1.download_button(
+        "Download easy-to-read report",
+        report_as_html(case["payload"]),
+        file_name=f"{case['case_id']}-patient-report.html",
+        mime="text/html",
+        width="stretch",
+    )
+    d2.download_button(
+        "Download clinical data",
+        report_as_json(case["payload"]),
+        file_name=f"{case['case_id']}-clinical-data.json",
+        mime="application/json",
+        width="stretch",
+    )
+    st.caption(
+        f"Report reference {case['case_id']}. The image and report remain only in this browser session."
+    )
+
+
+def analyze_page(settings, language):
+    st.header("Review a retinal image", anchor=False)
+    st.write(
+        "Upload a retinal photograph to check its capture quality and create a vessel map "
+        "for review by an eye-care professional."
+    )
+    st.markdown(
+        '<div class="safety-bar"><strong>Research use only.</strong> This tool does not '
+        "diagnose diabetic retinopathy, glaucoma, hypertension, or any other condition.</div>",
+        unsafe_allow_html=True,
+    )
+
+    with st.form("scan-form", clear_on_submit=False):
+        source = st.radio(
+            "Choose an image",
+            ["Upload my retinal image", "Use the demonstration image"],
+            horizontal=True,
+        )
+        uploaded = None
+        if source == "Upload my retinal image":
+            uploaded = st.file_uploader(
+                "Retinal photograph",
+                type=["png", "jpg", "jpeg", "tif", "tiff"],
+                help="Use a fundus-camera image with the circular retina centered and in focus.",
+            )
+        consent = st.checkbox(
+            "I understand this is a research vessel map, not a medical diagnosis."
+        )
+        submitted = st.form_submit_button(
+            "Check image and create report", type="primary", width="stretch"
+        )
+
+    if submitted:
+        if not consent:
+            st.warning("Please confirm that you understand the intended use before continuing.")
+        elif source == "Upload my retinal image" and uploaded is None:
+            st.warning("Choose a retinal image first.")
+        else:
+            try:
+                if source == "Use the demonstration image":
+                    image_bytes = DEMO_IMAGE.read_bytes()
+                else:
+                    image_bytes = uploaded.getvalue()
+                rgb = decode_image(image_bytes)
+                image_hash = hashlib.sha256(image_bytes).hexdigest()[:12]
+                with st.spinner("Checking image quality and mapping visible vessels..."):
+                    case = run_analysis(rgb, settings)
+                case_id = make_case_id()
+                report_text = PATIENT_TEXT[language]
+                report_outcome = {
+                    **case["outcome"],
+                    "title": report_text[case["outcome"]["level"]],
+                    "explanation": report_text[
+                        f'{case["outcome"]["level"]}_body'
+                    ],
+                    "next_step": report_text[
+                        f'{case["outcome"]["level"]}_next'
+                    ],
+                }
+                payload = make_report_payload(
+                    case_id,
+                    case["quality"],
+                    case["measures"],
+                    report_outcome,
+                    {
+                        "model": "ProbStrip StripConv U-Net",
+                        "mc_samples": settings["mc_samples"],
+                        "decision_threshold": settings["decision_threshold"],
+                        "uncertainty_threshold": settings["uncertainty_threshold"],
+                        "image_fingerprint": image_hash,
+                    },
+                    language=language,
+                )
+                case.update({"case_id": case_id, "payload": payload})
+                st.session_state.cases.append(case)
+                st.session_state.active_case = len(st.session_state.cases) - 1
+            except (FileNotFoundError, RuntimeError, ValueError) as exc:
+                st.error(str(exc))
+
+    if st.session_state.active_case is not None:
+        render_patient_result(
+            st.session_state.cases[st.session_state.active_case], language
+        )
+
+
+def compare_page():
+    st.header("Compare visits", anchor=False)
+    st.write(
+        "Compare research measurements from two images analyzed in this session. A change "
+        "can come from image quality or camera position and is not a diagnosis."
+    )
+    mapped = [case for case in st.session_state.cases if case["prediction"] is not None]
+    if len(mapped) < 2:
+        st.info("Analyze at least two usable retinal images in this session to compare them.")
+        return
+    labels = [case["case_id"] for case in mapped]
+    c1, c2 = st.columns(2)
+    first_label = c1.selectbox("Earlier visit", labels, index=0)
+    second_label = c2.selectbox("Later visit", labels, index=len(labels) - 1)
+    first = mapped[labels.index(first_label)]
+    second = mapped[labels.index(second_label)]
+    if first_label == second_label:
+        st.warning("Choose two different reports.")
+        return
+
+    rows = []
+    fields = [
+        ("Visible vessel coverage", "visible_vessel_coverage_percent", "%"),
+        ("Central vessel coverage", "central_vessel_coverage_percent", "%"),
+        ("Area needing review", "low_confidence_area_percent", "%"),
+    ]
+    for label, key, unit in fields:
+        earlier = first["measures"][key]
+        later = second["measures"][key]
+        rows.append(
+            {
+                "Research measurement": label,
+                "Earlier": f"{earlier:.2f}{unit}",
+                "Later": f"{later:.2f}{unit}",
+                "Difference": f"{later - earlier:+.2f}{unit}",
+            }
+        )
+    st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
+    before, after = st.columns(2)
+    before.image(first["overlay"], caption=f"Earlier: {first_label}", width="stretch")
+    after.image(second["overlay"], caption=f"Later: {second_label}", width="stretch")
+    st.warning(
+        "These images are not geometrically registered. A clinician must confirm that "
+        "camera angle, field of view, and image quality are comparable."
+    )
+
+
+def clinician_page():
+    st.header("Clinician details", anchor=False)
+    st.write(
+        "Technical output for review and research documentation. Every report remains preliminary."
+    )
+    if not st.session_state.cases:
+        st.info("Analyze a retinal image to view its technical record.")
+        return
+    labels = [case["case_id"] for case in st.session_state.cases]
+    selected = st.selectbox("Report reference", labels, index=len(labels) - 1)
+    case = st.session_state.cases[labels.index(selected)]
+    st.dataframe(quality_table(case["quality"]), hide_index=True, width="stretch")
+    st.json(case["payload"]["research_measures"], expanded=True)
+    if case["prediction"] is not None:
+        p1, p2, p3 = st.columns(3)
+        p1.image(case["display"], caption="Input", width="stretch")
+        p2.image(
+            (case["prediction"] * 255).astype(np.uint8),
+            caption="Mean vessel probability",
+            width="stretch",
+        )
+        p3.image(case["heat"], caption="MC-dropout variance", width="stretch")
+
+    note_key = f"note-{selected}"
+    sign_key = f"sign-{selected}"
+    st.text_area(
+        "Clinician note",
+        key=note_key,
+        placeholder="Document image limitations, corrections, or follow-up here.",
+    )
+    st.checkbox("Reviewed by a qualified clinician", key=sign_key)
+    if st.session_state.get(sign_key):
+        case["payload"]["clinician_review"] = {
+            "status": "reviewed",
+            "note": st.session_state.get(note_key, ""),
+        }
+        st.success("Review status is stored for this session and included in new downloads.")
+    d1, d2 = st.columns(2)
+    d1.download_button(
+        "Download technical JSON",
+        report_as_json(case["payload"]),
+        file_name=f"{selected}-technical.json",
+        mime="application/json",
+        width="stretch",
+    )
+    d2.download_button(
+        "Download preliminary FHIR JSON",
+        report_as_fhir(case["payload"]),
+        file_name=f"{selected}-fhir.json",
+        mime="application/fhir+json",
+        width="stretch",
+    )
+    st.caption(
+        "The FHIR-shaped export is an interoperability prototype and requires local profiling and validation before EHR use."
+    )
+
+
+def safety_page():
+    st.header("Safety and privacy", anchor=False)
+    st.subheader("What ProbStrip does", anchor=False)
+    st.write(
+        "It checks basic capture quality, creates a retinal blood-vessel segmentation, "
+        "and highlights pixels where repeated stochastic model passes disagree."
+    )
+    st.subheader("What ProbStrip does not do", anchor=False)
+    st.write(
+        "It does not detect or rule out a disease, prescribe treatment, replace an eye "
+        "examination, or provide emergency advice. The current checkpoint was developed "
+        "from a small research dataset and has not been prospectively validated."
+    )
+    st.subheader("Privacy in this release", anchor=False)
+    st.write(
+        "Images are processed in memory and are not intentionally saved by the application. "
+        "Reports stay in the current Streamlit session. Do not upload identifying clinical "
+        "images to a public demonstration deployment."
+    )
+    st.subheader("For researchers", anchor=False)
+    st.write(
+        "Clinical use requires representative multi-site evaluation, subgroup analysis, "
+        "calibration and abstention validation, cybersecurity controls, quality management, "
+        "and the regulatory review applicable in the deployment country."
+    )
+
+
+def main():
+    if "cases" not in st.session_state:
+        st.session_state.cases = []
+    if "active_case" not in st.session_state:
+        st.session_state.active_case = None
+
     device = "cuda" if torch.cuda.is_available() else "cpu"
+    checkpoint = os.getenv("PROBSTRIP_CHECKPOINT", str(DEFAULT_CHECKPOINT))
 
     with st.sidebar:
-        st.subheader("Navigation")
-        app_mode = st.radio(
-            "Select Section",
-            [
-                "Single-Scan Diagnostics",
-                "Live Camera Analysis",
-                "Training Manager",
-                "Batch Evaluation",
-            ],
-            index=0,
+        st.markdown('<div class="brand">ProbStrip</div>', unsafe_allow_html=True)
+        st.markdown(
+            '<div class="brand-sub">Retinal vessel review</div>', unsafe_allow_html=True
+        )
+        page = st.radio(
+            "Navigation",
+            ["Review image", "Compare visits", "Clinician details", "Safety and privacy"],
             label_visibility="collapsed",
         )
-
         st.divider()
-        st.markdown(f"**Compute Device**: `{device.upper()}`")
-        st.markdown(f"**Model Checkpoint**: `checkpoints/latest_model.pth`")
-
-    if app_mode == "Single-Scan Diagnostics":
-        st.subheader("Single-Scan Diagnostics & Uncertainty Quantification")
-
-        default_images, default_mask_dir = get_default_dataset_paths()
-
-        with st.expander("Inference Parameters", expanded=False):
-            exp_col1, exp_col2, exp_col3 = st.columns(3)
-            with exp_col1:
-                num_samples = st.slider("MC Passes (N)", 1, 50, 15, step=1)
-            with exp_col2:
-                uncertainty_thresh = st.slider("Uncertainty Threshold", 0.005, 0.08, 0.02, step=0.005, format="%.3f")
-            with exp_col3:
-                decision_thresh = st.slider("Decision Threshold (tau)", 0.1, 0.9, 0.50, step=0.01, format="%.2f")
-                checkpoint_path = st.text_input("Checkpoint Path", value="checkpoints/latest_model.pth")
-
-        if "num_samples" not in locals():
-            num_samples = 15
-            uncertainty_thresh = 0.02
-            decision_thresh = 0.50
-            checkpoint_path = "checkpoints/latest_model.pth"
-
-        col_src1, col_src2 = st.columns([1, 1])
-
-        input_bytes = None
-        mask_bytes = None
-        selected_img_path = None
-        matched_mask_path = None
-
-        with col_src1:
-            input_source = st.radio(
-                "Image Source",
-                ["Preset Dataset Sample", "Upload Custom Image"],
-                horizontal=True,
+        language = st.selectbox("Patient report language", ["English", "Hindi"])
+        with st.expander("Advanced model settings"):
+            mc_samples = st.slider("Repeated model passes", 5, 20, 10, 5)
+            decision_threshold = st.slider(
+                "Vessel decision threshold", 0.30, 0.70, 0.50, 0.05
             )
-
-        with col_src2:
-            if input_source == "Preset Dataset Sample":
-                if default_images:
-                    selected_img_path = st.selectbox(
-                        "Choose Sample Image",
-                        default_images,
-                        format_func=lambda x: os.path.basename(x),
-                    )
-                    base_name = os.path.splitext(os.path.basename(selected_img_path))[0]
-                    potential_mask = os.path.join(default_mask_dir, f"{base_name}_1stHO.png")
-                    if os.path.exists(potential_mask):
-                        matched_mask_path = potential_mask
-                else:
-                    st.info("No preset dataset found at local path. Use 'Upload Custom Image' option.")
-            else:
-                uploaded_img = st.file_uploader("Upload Scan (JPG/PNG/TIF)", type=["png", "jpg", "jpeg", "tif"])
-                if uploaded_img is not None:
-                    input_bytes = uploaded_img.read()
-
-                uploaded_mask = st.file_uploader("Upload Ground Truth Mask (Optional)", type=["png", "jpg", "jpeg", "tif"])
-                if uploaded_mask is not None:
-                    mask_bytes = uploaded_mask.read()
-
-        run_diag = st.button("Run Stochastic Inference", type="primary", use_container_width=True)
-
-        if "current_image_key" not in st.session_state:
-            st.session_state["current_image_key"] = None
-        if "inference_cache" not in st.session_state:
-            st.session_state["inference_cache"] = None
-
-        image_identifier = (
-            selected_img_path
-            if input_source == "Preset Dataset Sample"
-            else (hash(input_bytes) if input_bytes else None)
-        )
-
-        need_recompute = run_diag or (
-            st.session_state["inference_cache"] is None and image_identifier is not None
-        ) or (
-            st.session_state["current_image_key"] != (image_identifier, num_samples, checkpoint_path)
-            and run_diag
-        )
-
-        if need_recompute and image_identifier is not None:
-            raw_img = None
-            gt_mask = None
-
-            if selected_img_path is not None and input_source == "Preset Dataset Sample":
-                raw_img = cv2.imread(selected_img_path, cv2.IMREAD_GRAYSCALE)
-                if matched_mask_path and os.path.exists(matched_mask_path):
-                    gt_mask = cv2.imread(matched_mask_path, cv2.IMREAD_GRAYSCALE)
-            elif input_bytes is not None:
-                nparr = np.frombuffer(input_bytes, np.uint8)
-                raw_img = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
-                if mask_bytes is not None:
-                    mask_arr = np.frombuffer(mask_bytes, np.uint8)
-                    gt_mask = cv2.imdecode(mask_arr, cv2.IMREAD_GRAYSCALE)
-
-            if raw_img is not None:
-                raw_img = cv2.resize(raw_img, (256, 256))
-                preprocessor = MedicalImagePreprocessor(use_clahe=True, norm_mode="minmax")
-                img_tensor = preprocessor.process(raw_img)
-
-                model = get_cached_model(checkpoint_path, device)
-                engine = StochasticInferenceEngine(
-                    model=model,
-                    num_samples=num_samples,
-                    decision_threshold=decision_thresh,
-                    uncertainty_threshold=uncertainty_thresh,
-                    device=device,
-                )
-
-                results = engine.predict_stochastic(img_tensor)
-
-                st.session_state["inference_cache"] = {
-                    "raw_img": raw_img,
-                    "gt_mask": gt_mask,
-                    "mean_pred": results["mean_prediction"].squeeze().cpu().numpy(),
-                    "variance_map": results["variance_map"].squeeze().cpu().numpy(),
-                }
-                st.session_state["current_image_key"] = (image_identifier, num_samples, checkpoint_path)
-
-        if st.session_state["inference_cache"] is not None:
-            cached = st.session_state["inference_cache"]
-            raw_img = cached["raw_img"]
-            gt_mask = cached["gt_mask"]
-            mean_pred = cached["mean_pred"]
-            variance_map = cached["variance_map"]
-
-            binary_mask = (mean_pred >= decision_thresh).astype(np.float32)
-            low_conf = (variance_map >= uncertainty_thresh).astype(np.float32)
-
-            var_norm = (
-                (variance_map - variance_map.min())
-                / (variance_map.max() - variance_map.min() + 1e-8)
-                * 255
-            ).astype(np.uint8)
-            var_color = cv2.applyColorMap(var_norm, cv2.COLORMAP_JET)
-            var_color_rgb = cv2.cvtColor(var_color, cv2.COLOR_BGR2RGB)
-
-            flag_overlay = cv2.cvtColor(raw_img, cv2.COLOR_GRAY2RGB)
-            flag_overlay[low_conf > 0] = [255, 0, 0]
-
-            st.divider()
-
-            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-
-            if gt_mask is not None:
-                gt_mask_resized = cv2.resize(gt_mask, (256, 256), interpolation=cv2.INTER_NEAREST)
-                gt_bin = (gt_mask_resized > 127).astype(np.float32)
-
-                dsc = dice_similarity_coefficient(mean_pred, gt_bin, threshold=decision_thresh)
-                iou = intersection_over_union(mean_pred, gt_bin, threshold=decision_thresh)
-                ece = expected_calibration_error(mean_pred, gt_bin)
-
-                col_m1.metric("Dice Similarity (DSC)", f"{dsc:.4f}")
-                col_m2.metric("IoU (Jaccard)", f"{iou:.4f}")
-                col_m3.metric("Calibration Error (ECE)", f"{ece:.4f}")
-                col_m4.metric("Mean Epistemic Variance", f"{np.mean(variance_map):.6f}")
-            else:
-                col_m1.metric("Dice Similarity (DSC)", "N/A - No Mask")
-                col_m2.metric("IoU (Jaccard)", "N/A - No Mask")
-                col_m3.metric("Calibration Error (ECE)", "N/A - No Mask")
-                col_m4.metric("Mean Epistemic Variance", f"{np.mean(variance_map):.6f}")
-
-            st.divider()
-            st.subheader("Visual Interpretability & Uncertainty Decomposition")
-            c1, c2, c3, c4 = st.columns(4)
-
-            with c1:
-                st.image(raw_img, caption="1. Input Medical Scan", use_container_width=True)
-                if gt_mask is not None:
-                    st.image((gt_bin * 255).astype(np.uint8), caption="Ground Truth Mask", use_container_width=True)
-
-            with c2:
-                st.image((mean_pred * 255).astype(np.uint8), caption="2. Probabilistic Mean Mask", use_container_width=True)
-                st.image((binary_mask * 255).astype(np.uint8), caption="Binary Decision Mask", use_container_width=True)
-
-            with c3:
-                st.image(var_color_rgb, caption="3. Epistemic Uncertainty (Variance)", use_container_width=True)
-
-            with c4:
-                st.image(flag_overlay, caption="4. Low-Confidence Warning (Red)", use_container_width=True)
-
-    elif app_mode == "Live Camera Analysis":
-        st.subheader("Live Camera Capture & Analysis")
-
-        if "webcam_history" not in st.session_state:
-            st.session_state["webcam_history"] = []
-
-        with st.expander("Camera Parameters", expanded=False):
-            cam_s1, cam_s2, cam_s3, cam_s4 = st.columns(4)
-            with cam_s1:
-                cam_mc_passes = st.slider("MC Passes", 5, 30, 10, step=5, key="cam_mc")
-            with cam_s2:
-                cam_decision = st.slider("Decision Threshold", 0.1, 0.9, 0.5, step=0.05, key="cam_dec")
-            with cam_s3:
-                cam_unc_thresh = st.slider("Uncertainty Threshold", 0.005, 0.08, 0.02, step=0.005, key="cam_unc")
-            with cam_s4:
-                cam_checkpoint = st.text_input("Checkpoint Path", value="checkpoints/latest_model.pth", key="cam_ckpt")
-
-        if "cam_mc_passes" not in locals():
-            cam_mc_passes = 10
-            cam_decision = 0.5
-            cam_unc_thresh = 0.02
-            cam_checkpoint = "checkpoints/latest_model.pth"
-
-        camera_image = st.camera_input("Capture Scan via Camera")
-
-        if camera_image is not None:
-            cam_bytes = camera_image.getvalue()
-            nparr = np.frombuffer(cam_bytes, np.uint8)
-            captured_frame = cv2.imdecode(nparr, cv2.IMREAD_GRAYSCALE)
-
-            if captured_frame is not None:
-                captured_frame = cv2.resize(captured_frame, (256, 256))
-                preprocessor = MedicalImagePreprocessor(use_clahe=True, norm_mode="minmax")
-                cam_tensor = preprocessor.process(captured_frame)
-
-                cam_model = get_cached_model(cam_checkpoint, device)
-                cam_engine = StochasticInferenceEngine(
-                    model=cam_model,
-                    num_samples=cam_mc_passes,
-                    decision_threshold=cam_decision,
-                    uncertainty_threshold=cam_unc_thresh,
-                    device=device,
-                )
-
-                cam_results = cam_engine.predict_stochastic(cam_tensor)
-
-                cam_mean = cam_results["mean_prediction"].squeeze().cpu().numpy()
-                cam_var = cam_results["variance_map"].squeeze().cpu().numpy()
-                cam_binary = (cam_mean >= cam_decision).astype(np.float32)
-                cam_low_conf = (cam_var >= cam_unc_thresh).astype(np.float32)
-
-                cam_var_norm = (
-                    (cam_var - cam_var.min())
-                    / (cam_var.max() - cam_var.min() + 1e-8)
-                    * 255
-                ).astype(np.uint8)
-                cam_var_color = cv2.applyColorMap(cam_var_norm, cv2.COLORMAP_JET)
-                cam_var_rgb = cv2.cvtColor(cam_var_color, cv2.COLOR_BGR2RGB)
-
-                cam_overlay = cv2.cvtColor(captured_frame, cv2.COLOR_GRAY2RGB)
-                cam_overlay[cam_low_conf > 0] = [255, 0, 0]
-
-                foreground_ratio = float(np.mean(cam_binary))
-                mean_variance = float(np.mean(cam_var))
-                max_variance = float(np.max(cam_var))
-                low_conf_ratio = float(np.mean(cam_low_conf))
-
-                st.divider()
-                st.subheader("Analysis Metrics")
-
-                mc1, mc2, mc3, mc4 = st.columns(4)
-                mc1.metric("Foreground Coverage", f"{foreground_ratio * 100:.1f}%")
-                mc2.metric("Mean Variance", f"{mean_variance:.6f}")
-                mc3.metric("Max Variance", f"{max_variance:.6f}")
-                mc4.metric("Low-Confidence Ratio", f"{low_conf_ratio * 100:.1f}%")
-
-                vc1, vc2, vc3, vc4 = st.columns(4)
-                with vc1:
-                    st.image(captured_frame, caption="1. Captured Scan", use_container_width=True)
-                with vc2:
-                    st.image((cam_mean * 255).astype(np.uint8), caption="2. Probabilistic Mask", use_container_width=True)
-                with vc3:
-                    st.image(cam_var_rgb, caption="3. Uncertainty Heatmap", use_container_width=True)
-                with vc4:
-                    st.image(cam_overlay, caption="4. Low-Confidence Warning (Red)", use_container_width=True)
-
-                timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                st.session_state["webcam_history"].append({
-                    "Timestamp": timestamp,
-                    "Foreground Coverage (%)": round(foreground_ratio * 100, 2),
-                    "Mean Variance": round(mean_variance, 6),
-                    "Max Variance": round(max_variance, 6),
-                    "Low-Confidence Ratio (%)": round(low_conf_ratio * 100, 2),
-                    "MC Passes": cam_mc_passes,
-                    "Decision Threshold": cam_decision,
-                    "Uncertainty Threshold": cam_unc_thresh,
-                })
-
-        if st.session_state["webcam_history"]:
-            st.divider()
-            st.subheader("Session History")
-            hist_df = pd.DataFrame(st.session_state["webcam_history"])
-            st.dataframe(hist_df, use_container_width=True)
-
-            hist_csv = io.StringIO()
-            hist_df.to_csv(hist_csv, index=False)
-            st.download_button(
-                label="Download Session Report (CSV)",
-                data=hist_csv.getvalue(),
-                file_name=f"probstrip_session_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                mime="text/csv",
-                use_container_width=True,
+            uncertainty_threshold = st.slider(
+                "Uncertainty flag threshold", 0.005, 0.050, 0.020, 0.005
             )
+        st.caption(f"Compute: {device.upper()} | Session reports: {len(st.session_state.cases)}")
 
-            if st.button("Clear History", use_container_width=True):
-                st.session_state["webcam_history"] = []
-                st.rerun()
+    settings = {
+        "device": device,
+        "checkpoint": checkpoint,
+        "mc_samples": mc_samples,
+        "decision_threshold": decision_threshold,
+        "uncertainty_threshold": uncertainty_threshold,
+    }
 
-    elif app_mode == "Training Manager":
-        st.subheader("Model Training Manager")
-        col_t1, col_t2 = st.columns(2)
-
-        with col_t1:
-            dataset_source = st.selectbox(
-                "Training Dataset",
-                ["Preset Local CHASE_DB1", "Synthetic Generator"],
-            )
-            epochs = st.slider("Number of Epochs", 5, 50, 15, step=5)
-            batch_size = st.select_slider("Batch Size", options=[2, 4, 8, 16], value=4)
-
-        with col_t2:
-            learning_rate = st.select_slider(
-                "Learning Rate",
-                options=[1e-4, 5e-4, 1e-3, 5e-3],
-                value=1e-3,
-                format_func=lambda x: f"{x:.0e}",
-            )
-            save_checkpoint_dir = st.text_input("Checkpoint Directory", value="checkpoints")
-
-        start_training = st.button("Start Training", type="primary", use_container_width=True)
-
-        if start_training:
-            os.makedirs(save_checkpoint_dir, exist_ok=True)
-            st.info("Initializing dataset and dataloaders...")
-
-            default_images, default_mask_dir = get_default_dataset_paths()
-
-            if dataset_source == "Preset Local CHASE_DB1" and default_images:
-                matched_pairs = []
-                for impath in default_images:
-                    bname = os.path.splitext(os.path.basename(impath))[0]
-                    mpath = os.path.join(default_mask_dir, f"{bname}_1stHO.png")
-                    if os.path.exists(mpath):
-                        matched_pairs.append((impath, mpath))
-
-                if matched_pairs:
-                    train_imgs = [p[0] for p in matched_pairs]
-                    train_masks = [p[1] for p in matched_pairs]
-                    dataset = ElongatedStructureDataset(
-                        image_paths=train_imgs,
-                        mask_paths=train_masks,
-                        image_size=(256, 256),
-                        augment=True,
-                    )
-                else:
-                    dataset = ElongatedStructureDataset(
-                        length=40, image_size=(256, 256), augment=True
-                    )
-            else:
-                dataset = ElongatedStructureDataset(
-                    length=40, image_size=(256, 256), augment=True
-                )
-
-            loader = DataLoader(dataset, batch_size=batch_size, shuffle=True)
-
-            model = ProbabilisticUNet(
-                in_channels=1,
-                out_channels=1,
-                features=[32, 64, 128, 256],
-                strip_kernel_size=7,
-                dropout_prob=0.2,
-            ).to(device)
-
-            optimizer = torch.optim.Adam(model.parameters(), lr=learning_rate)
-            criterion = BCEDiceLoss()
-
-            prog_bar = st.progress(0)
-            status_text = st.empty()
-            plot_holder = st.empty()
-
-            history_losses = []
-            history_dsc = []
-
-            for epoch in range(epochs):
-                model.train()
-                epoch_loss = 0.0
-                epoch_dsc = 0.0
-
-                for images, masks in loader:
-                    images = images.to(device)
-                    masks = masks.to(device)
-
-                    optimizer.zero_grad()
-                    preds = model(images)
-                    loss = criterion(preds, masks)
-                    loss.backward()
-                    optimizer.step()
-
-                    epoch_loss += loss.item() * images.size(0)
-                    epoch_dsc += dice_similarity_coefficient(preds, masks) * images.size(0)
-
-                total_samples = len(dataset)
-                avg_loss = epoch_loss / total_samples
-                avg_dsc = epoch_dsc / total_samples
-
-                history_losses.append(avg_loss)
-                history_dsc.append(avg_dsc)
-
-                prog_bar.progress((epoch + 1) / epochs)
-                status_text.markdown(
-                    f"**Epoch {epoch + 1}/{epochs}** — Loss: `{avg_loss:.4f}` | DSC: `{avg_dsc:.4f}`"
-                )
-
-                df_metrics = pd.DataFrame({"BCEDice Loss": history_losses, "Train DSC": history_dsc})
-                plot_holder.line_chart(df_metrics)
-
-            save_path = os.path.join(save_checkpoint_dir, "latest_model.pth")
-            torch.save({"model_state_dict": model.state_dict()}, save_path)
-            st.success(f"Training completed. Model saved to `{save_path}`")
-            get_cached_model.clear()
-
-    elif app_mode == "Batch Evaluation":
-        st.subheader("Batch Evaluation & Reporting")
-
-        col_b1, col_b2 = st.columns(2)
-        with col_b1:
-            batch_dir = st.text_input(
-                "Dataset Directory",
-                value=r"C:\Users\parth\Documents\Prob-strip-dataset",
-            )
-        with col_b2:
-            batch_samples = st.slider("MC Passes", 5, 30, 10, step=5)
-
-        run_batch = st.button("Run Batch Evaluation", type="primary", use_container_width=True)
-
-        if run_batch:
-            img_dir = os.path.join(batch_dir, "Images")
-            mask_dir = os.path.join(batch_dir, "Masks")
-
-            if not os.path.exists(img_dir):
-                st.error(f"Images directory not found at: {img_dir}")
-            else:
-                image_files = sorted(glob.glob(os.path.join(img_dir, "*.jpg")) + glob.glob(os.path.join(img_dir, "*.png")))
-                st.info(f"Found {len(image_files)} scans. Executing stochastic inference...")
-
-                model = get_cached_model("checkpoints/latest_model.pth", device)
-                engine = StochasticInferenceEngine(
-                    model=model,
-                    num_samples=batch_samples,
-                    decision_threshold=0.5,
-                    uncertainty_threshold=0.02,
-                    device=device,
-                )
-
-                records = []
-                b_prog = st.progress(0)
-
-                for idx, impath in enumerate(image_files):
-                    bname = os.path.basename(impath)
-                    name_no_ext = os.path.splitext(bname)[0]
-                    maskpath = os.path.join(mask_dir, f"{name_no_ext}_1stHO.png")
-
-                    raw_img = cv2.imread(impath, cv2.IMREAD_GRAYSCALE)
-                    raw_img = cv2.resize(raw_img, (256, 256))
-                    preprocessor = MedicalImagePreprocessor(use_clahe=True, norm_mode="minmax")
-                    img_tensor = preprocessor.process(raw_img)
-
-                    results = engine.predict_stochastic(img_tensor)
-                    mean_pred = results["mean_prediction"].squeeze().cpu().numpy()
-                    variance_map = results["variance_map"].squeeze().cpu().numpy()
-                    mean_var = float(np.mean(variance_map))
-
-                    dsc, iou, ece = np.nan, np.nan, np.nan
-                    if os.path.exists(maskpath):
-                        gt_mask = cv2.imread(maskpath, cv2.IMREAD_GRAYSCALE)
-                        gt_mask = cv2.resize(gt_mask, (256, 256), interpolation=cv2.INTER_NEAREST)
-                        gt_bin = (gt_mask > 127).astype(np.float32)
-
-                        dsc = dice_similarity_coefficient(mean_pred, gt_bin)
-                        iou = intersection_over_union(mean_pred, gt_bin)
-                        ece = expected_calibration_error(mean_pred, gt_bin)
-
-                    records.append({
-                        "Image Name": bname,
-                        "Dice Similarity (DSC)": dsc,
-                        "IoU (Jaccard)": iou,
-                        "Calibration Error (ECE)": ece,
-                        "Mean Epistemic Variance": mean_var,
-                    })
-
-                    b_prog.progress((idx + 1) / len(image_files))
-
-                df_results = pd.DataFrame(records)
-
-                st.subheader("Summary Statistics")
-                sc1, sc2, sc3, sc4 = st.columns(4)
-                sc1.metric("Average DSC", f"{df_results['Dice Similarity (DSC)'].mean():.4f}")
-                sc2.metric("Average IoU", f"{df_results['IoU (Jaccard)'].mean():.4f}")
-                sc3.metric("Average ECE", f"{df_results['Calibration Error (ECE)'].mean():.4f}")
-                sc4.metric("Average Epistemic Variance", f"{df_results['Mean Epistemic Variance'].mean():.6f}")
-
-                st.subheader("Per-Image Results")
-                st.dataframe(df_results, use_container_width=True)
-
-                csv_buffer = io.StringIO()
-                df_results.to_csv(csv_buffer, index=False)
-                st.download_button(
-                    label="Download Full Evaluation Report (CSV)",
-                    data=csv_buffer.getvalue(),
-                    file_name="probstrip_evaluation_report.csv",
-                    mime="text/csv",
-                    use_container_width=True,
-                )
+    if page == "Review image":
+        analyze_page(settings, language)
+    elif page == "Compare visits":
+        compare_page()
+    elif page == "Clinician details":
+        clinician_page()
+    else:
+        safety_page()
 
 
 if __name__ == "__main__":
