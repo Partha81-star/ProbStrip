@@ -18,6 +18,7 @@ medical diagnosis.
 6. Download an easy-to-read HTML report, technical JSON, or preliminary
    FHIR-shaped JSON.
 7. Compare research measurements from two usable images in the current session.
+8. Capture a still image on a phone or preview a live vessel overlay with WebRTC.
 
 ## Safety and intended use
 
@@ -46,6 +47,20 @@ The default checkpoint is `checkpoints/latest_model.pth`. Override it with the
 `PROBSTRIP_CHECKPOINT` environment variable. The application fails visibly and
 does not return a prediction if the checkpoint cannot be loaded.
 
+### Camera modes
+
+- **Take a photo** uses Streamlit's native camera control and is the recommended
+  path on phones. A captured still receives the same quality gate and full
+  uncertainty report as an uploaded image.
+- **Live vessel preview** uses WebRTC and a throttled 128px single model pass.
+  It is intended for positioning feedback only and does not calculate the
+  uncertainty values shown in a saved report.
+
+Browser camera access requires HTTPS except on `localhost`. Streamlit Community
+Cloud supplies HTTPS automatically. The app includes a public STUN server for
+connection setup; restrictive institutional or mobile networks may also require
+a separately configured TURN service.
+
 ## Test
 
 ```powershell
@@ -72,6 +87,7 @@ app.py                         Patient and clinician Streamlit experience
 clinical/quality.py            Acquisition-quality gate
 clinical/analysis.py           Visuals, research measurements, review outcome
 clinical/reporting.py          HTML, JSON, and preliminary FHIR exports
+clinical/live.py               Throttled real-time WebRTC frame processor
 models/                        Probabilistic StripConv U-Net
 inference/                     Monte Carlo dropout inference
 training/                      Offline training utilities
@@ -85,4 +101,3 @@ tests/                         Safety and report behavior tests
 - Calibration and selective-risk validation for every abstention threshold.
 - Clinician correction tools and geometrically registered longitudinal images.
 - Subgroup, privacy, security, usability, and prospective clinical studies.
-

@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 import torch
+from streamlit_webrtc import WebRtcMode, webrtc_streamer
 
 from clinical.analysis import (
     build_visuals,
@@ -16,6 +17,7 @@ from clinical.analysis import (
     review_outcome,
 )
 from clinical.quality import assess_image_quality
+from clinical.live import LiveVesselProcessor
 from clinical.reporting import (
     make_case_id,
     make_report_payload,
@@ -36,7 +38,7 @@ st.set_page_config(
     page_title="ProbStrip Retinal Review",
     page_icon="PS",
     layout="wide",
-    initial_sidebar_state="expanded",
+    initial_sidebar_state="auto",
 )
 
 st.markdown(
@@ -54,6 +56,9 @@ st.markdown(
     .plain-note { color:var(--muted); font-size:.92rem; }
     [data-testid="stMetric"] { border-top: 2px solid #d7e3e1; padding-top: .65rem; }
     [data-testid="stSidebar"] { background:#f7faf9; }
+    [data-testid="stFileUploaderDropzone"] { min-height: 7rem; }
+    video { width:100% !important; height:auto !important; border-radius:6px; }
+    iframe { max-width:100%; }
     .stButton > button, .stDownloadButton > button { border-radius:6px; min-height:2.65rem; }
     @media (prefers-color-scheme: dark) {
       h1, h2, h3, .brand { color:#f4f7f6; }
@@ -65,7 +70,13 @@ st.markdown(
       [data-testid="stSidebar"] { background:#111917; }
     }
     @media (max-width: 720px) {
-      .block-container { padding-top: 1rem; }
+      .block-container { padding: .8rem .9rem 2rem; }
+      h1 { font-size:1.55rem !important; line-height:1.25; }
+      h2 { font-size:1.25rem !important; }
+      [data-testid="stHorizontalBlock"] { gap:.7rem; }
+      [data-testid="stMetric"] { min-width:0; }
+      [data-testid="stMetricValue"] { font-size:1.35rem; }
+      [data-testid="stFileUploaderDropzoneInstructions"] span { font-size:.84rem; }
       .stButton > button, .stDownloadButton > button { width:100%; }
     }
     </style>
@@ -131,7 +142,7 @@ PATIENT_TEXT = {
 
 
 @st.cache_resource(show_spinner=False)
-def load_model(checkpoint_path: str, device: str):
+def load_model(checkpoint_path: str, device: str, variant="report"):
     path = Path(checkpoint_path)
     if not path.is_file():
         raise FileNotFoundError(
@@ -150,6 +161,18 @@ def load_model(checkpoint_path: str, device: str):
     model.load_state_dict(state_dict, strict=True)
     model.eval()
     return model
+
+
+@st.cache_resource(show_spinner=False)
+def get_live_processor(checkpoint_path, device, decision_threshold):
+    model = load_model(checkpoint_path, device, variant="live")
+    return LiveVesselProcessor(
+        model=model,
+        device=device,
+        decision_threshold=decision_threshold,
+        process_every=2,
+        input_size=128,
+    )
 
 
 def decode_image(image_bytes: bytes):
@@ -233,6 +256,38 @@ def quality_table(quality):
             }
         )
     return pd.DataFrame(rows)
+
+
+def create_and_store_case(image_bytes, settings, language):
+    rgb = decode_image(image_bytes)
+    image_hash = hashlib.sha256(image_bytes).hexdigest()[:12]
+    case = run_analysis(rgb, settings)
+    case_id = make_case_id()
+    report_text = PATIENT_TEXT[language]
+    report_outcome = {
+        **case["outcome"],
+        "title": report_text[case["outcome"]["level"]],
+        "explanation": report_text[f'{case["outcome"]["level"]}_body'],
+        "next_step": report_text[f'{case["outcome"]["level"]}_next'],
+    }
+    payload = make_report_payload(
+        case_id,
+        case["quality"],
+        case["measures"],
+        report_outcome,
+        {
+            "model": "ProbStrip StripConv U-Net",
+            "mc_samples": settings["mc_samples"],
+            "decision_threshold": settings["decision_threshold"],
+            "uncertainty_threshold": settings["uncertainty_threshold"],
+            "image_fingerprint": image_hash,
+        },
+        language=language,
+    )
+    case.update({"case_id": case_id, "payload": payload})
+    st.session_state.cases.append(case)
+    st.session_state.active_case = len(st.session_state.cases) - 1
+    return case
 
 
 def render_patient_result(case, language):
@@ -368,39 +423,8 @@ def analyze_page(settings, language):
                     image_bytes = DEMO_IMAGE.read_bytes()
                 else:
                     image_bytes = uploaded.getvalue()
-                rgb = decode_image(image_bytes)
-                image_hash = hashlib.sha256(image_bytes).hexdigest()[:12]
                 with st.spinner("Checking image quality and mapping visible vessels..."):
-                    case = run_analysis(rgb, settings)
-                case_id = make_case_id()
-                report_text = PATIENT_TEXT[language]
-                report_outcome = {
-                    **case["outcome"],
-                    "title": report_text[case["outcome"]["level"]],
-                    "explanation": report_text[
-                        f'{case["outcome"]["level"]}_body'
-                    ],
-                    "next_step": report_text[
-                        f'{case["outcome"]["level"]}_next'
-                    ],
-                }
-                payload = make_report_payload(
-                    case_id,
-                    case["quality"],
-                    case["measures"],
-                    report_outcome,
-                    {
-                        "model": "ProbStrip StripConv U-Net",
-                        "mc_samples": settings["mc_samples"],
-                        "decision_threshold": settings["decision_threshold"],
-                        "uncertainty_threshold": settings["uncertainty_threshold"],
-                        "image_fingerprint": image_hash,
-                    },
-                    language=language,
-                )
-                case.update({"case_id": case_id, "payload": payload})
-                st.session_state.cases.append(case)
-                st.session_state.active_case = len(st.session_state.cases) - 1
+                    create_and_store_case(image_bytes, settings, language)
             except (FileNotFoundError, RuntimeError, ValueError) as exc:
                 st.error(str(exc))
 
@@ -408,6 +432,100 @@ def analyze_page(settings, language):
         render_patient_result(
             st.session_state.cases[st.session_state.active_case], language
         )
+
+
+def camera_page(settings, language):
+    st.header("Camera and live preview", anchor=False)
+    st.write(
+        "Use a phone camera to capture a retinal photograph, or preview the vessel "
+        "overlay continuously with a webcam. A fundus-camera image is still required."
+    )
+    capture_tab, live_tab = st.tabs(["Take a photo", "Live vessel preview"])
+
+    with capture_tab:
+        st.markdown("**Best for phones and tablets**")
+        st.caption(
+            "Use the rear camera when available. Center the circular retinal image, "
+            "avoid screen glare, and hold the device steady."
+        )
+        camera_image = st.camera_input(
+            "Take a retinal photograph",
+            help="This opens the device camera. It is not a substitute for a fundus camera.",
+        )
+        camera_consent = st.checkbox(
+            "I understand the captured image creates a research map, not a diagnosis.",
+            key="camera-consent",
+        )
+        analyze_capture = st.button(
+            "Check captured image and create report",
+            type="primary",
+            width="stretch",
+            disabled=camera_image is None,
+        )
+        if analyze_capture:
+            if not camera_consent:
+                st.warning("Confirm the intended use before creating the report.")
+            else:
+                try:
+                    with st.spinner(
+                        "Checking capture quality and running uncertainty analysis..."
+                    ):
+                        case = create_and_store_case(
+                            camera_image.getvalue(), settings, language
+                        )
+                    render_patient_result(case, language)
+                except (FileNotFoundError, RuntimeError, ValueError) as exc:
+                    st.error(str(exc))
+
+    with live_tab:
+        st.markdown("**Low-latency research preview**")
+        st.info(
+            "The live overlay uses one smaller model pass for speed and does not calculate "
+            "clinical uncertainty. Teal pixels are the latest vessel estimate. Use the "
+            "photo tab to create a full report."
+        )
+        live_enabled = st.toggle(
+            "Enable live webcam",
+            help="Your browser will ask for camera permission after this is enabled.",
+        )
+        if live_enabled:
+            try:
+                processor = get_live_processor(
+                    settings["checkpoint"],
+                    settings["device"],
+                    settings["decision_threshold"],
+                )
+                ice_configuration = {
+                    "iceServers": [
+                        {"urls": ["stun:stun.l.google.com:19302"]}
+                    ]
+                }
+                webrtc_streamer(
+                    key="probstrip-live-vessel-preview",
+                    mode=WebRtcMode.SENDRECV,
+                    frontend_rtc_configuration=ice_configuration,
+                    server_rtc_configuration=ice_configuration,
+                    media_stream_constraints={
+                        "video": {
+                            "width": {"ideal": 640},
+                            "height": {"ideal": 480},
+                            "facingMode": {"ideal": "environment"},
+                        },
+                        "audio": False,
+                    },
+                    video_frame_callback=processor.process,
+                    async_processing=True,
+                    media_toggle_controls=False,
+                )
+                st.caption(
+                    "Camera access requires HTTPS after deployment. Streamlit Community "
+                    "Cloud provides HTTPS; some restricted networks may additionally "
+                    "require a TURN server."
+                )
+            except (FileNotFoundError, RuntimeError, ValueError) as exc:
+                st.error(str(exc))
+        else:
+            st.caption("Enable live webcam when you are ready to grant camera access.")
 
 
 def compare_page():
@@ -557,7 +675,13 @@ def main():
         )
         page = st.radio(
             "Navigation",
-            ["Review image", "Compare visits", "Clinician details", "Safety and privacy"],
+            [
+                "Review image",
+                "Camera and live",
+                "Compare visits",
+                "Clinician details",
+                "Safety and privacy",
+            ],
             label_visibility="collapsed",
         )
         st.divider()
@@ -582,6 +706,8 @@ def main():
 
     if page == "Review image":
         analyze_page(settings, language)
+    elif page == "Camera and live":
+        camera_page(settings, language)
     elif page == "Compare visits":
         compare_page()
     elif page == "Clinician details":
