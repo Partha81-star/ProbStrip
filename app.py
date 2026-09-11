@@ -19,6 +19,11 @@ from clinical.analysis import (
     review_outcome,
 )
 from clinical.biomarkers import calculate_vascular_biomarkers, reviewed_mask
+from clinical.general_reporting import (
+    general_report_as_html,
+    general_report_as_json,
+    make_general_report_payload,
+)
 from clinical.modalities import MODALITIES, analyze_general_image
 from clinical.quality import assess_image_quality
 from clinical.registration import register_followup, vessel_change_map
@@ -383,6 +388,15 @@ def render_patient_result(case, language):
             "and measurements include the saved correction; the original AI output "
             "remains in the technical record."
         )
+        clinician_review = case["payload"]["clinician_review"]
+        if clinician_review.get("impression"):
+            st.markdown(
+                f"**Clinician impression or diagnosis:** {clinician_review['impression']}"
+            )
+        if clinician_review.get("recommendation"):
+            st.markdown(
+                f"**Clinician-recommended next step:** {clinician_review['recommendation']}"
+            )
     st.markdown(
         f'<div class="result-{outcome["level"]}"><strong>{translated_title}</strong>'
         f'<br>{translated_body}<br><br><strong>{text["next"]}:</strong> '
@@ -463,7 +477,16 @@ def render_patient_result(case, language):
 
 
 def analyze_page(settings, language):
-    st.header("Review a retinal image", anchor=False)
+    st.header("Review a medical image", anchor=False)
+    category = st.selectbox(
+        "What kind of image are you reviewing?",
+        ["Retinal fundus image", *MODALITIES.keys()],
+        key="review-image-category",
+    )
+    if category != "Retinal fundus image":
+        general_imaging_page(category)
+        return
+
     st.write(
         "Upload a retinal photograph to check its capture quality and create a vessel map "
         "for review by an eye-care professional."
@@ -477,7 +500,11 @@ def analyze_page(settings, language):
     with st.form("scan-form", clear_on_submit=False):
         source = st.radio(
             "Choose an image",
-            ["Upload my retinal image", "Use the demonstration image"],
+            [
+                "Upload my retinal image",
+                "Use camera",
+                "Use the demonstration image",
+            ],
             horizontal=True,
         )
         uploaded = None
@@ -486,6 +513,11 @@ def analyze_page(settings, language):
                 "Retinal photograph",
                 type=["png", "jpg", "jpeg", "tif", "tiff"],
                 help="Use a fundus-camera image with the circular retina centered and in focus.",
+            )
+        elif source == "Use camera":
+            uploaded = st.camera_input(
+                "Take a retinal photograph",
+                help="Use a fundus attachment or photograph an existing fundus image without glare.",
             )
         consent = st.checkbox(
             "I understand this is a research vessel map, not a medical diagnosis."
@@ -497,7 +529,7 @@ def analyze_page(settings, language):
     if submitted:
         if not consent:
             st.warning("Please confirm that you understand the intended use before continuing.")
-        elif source == "Upload my retinal image" and uploaded is None:
+        elif source != "Use the demonstration image" and uploaded is None:
             st.warning("Choose a retinal image first.")
         else:
             try:
@@ -506,7 +538,8 @@ def analyze_page(settings, language):
                 else:
                     image_bytes = uploaded.getvalue()
                 with st.spinner("Checking image quality and mapping visible vessels..."):
-                    create_and_store_case(image_bytes, settings, language)
+                    case = create_and_store_case(image_bytes, settings, language)
+                st.success(f"Report created successfully: {case['case_id']}")
             except (FileNotFoundError, RuntimeError, ValueError) as exc:
                 st.error(str(exc))
 
@@ -610,10 +643,10 @@ def camera_page(settings, language):
             st.caption("Enable live webcam when you are ready to grant camera access.")
 
 
-def general_imaging_page():
-    st.header("X-ray and other imaging", anchor=False)
+def general_imaging_page(modality):
     st.write(
-        "Improve visibility and review image structure from common medical images. "
+        "Scan or upload the image to improve visibility, review its technical quality, "
+        "and create a report. "
         "This workspace does not detect fractures, tumors, infections, or other disease."
     )
     st.markdown(
@@ -622,7 +655,6 @@ def general_imaging_page():
         unsafe_allow_html=True,
     )
 
-    modality = st.selectbox("Imaging type", list(MODALITIES))
     modality_info = MODALITIES[modality]
     st.caption(modality_info["guidance"])
     source = st.segmented_control(
@@ -683,7 +715,18 @@ def general_imaging_page():
                     invert=invert,
                 )
                 result["original"] = original
+                fingerprint = hashlib.sha256(media.getvalue()).hexdigest()[:12]
+                result["payload"] = make_general_report_payload(
+                    make_case_id(),
+                    modality,
+                    result["quality"],
+                    result["edge_area_percent"],
+                    fingerprint,
+                )
                 st.session_state.general_image_review = result
+                st.success(
+                    f"Report created successfully: {result['payload']['case_id']}"
+                )
             except ValueError as exc:
                 st.error(str(exc))
 
@@ -717,6 +760,51 @@ def general_imaging_page():
         caption="Teal marks visible intensity edges. It does not mark fractures or disease.",
         width="stretch",
     )
+    st.subheader("Clinical interpretation", anchor=False)
+    st.write(
+        "A qualified clinician can add the diagnostic impression that will appear in "
+        "the patient report. ProbStrip does not invent an automated diagnosis when a "
+        "validated model is unavailable."
+    )
+    report_id = result["payload"]["case_id"]
+    observations = st.text_area(
+        "Clinician observations",
+        key=f"general-observations-{report_id}",
+        placeholder="Describe relevant image findings and limitations.",
+    )
+    impression = st.text_input(
+        "Clinical impression or diagnosis",
+        key=f"general-impression-{report_id}",
+        placeholder="To be completed by a qualified healthcare professional.",
+    )
+    recommendation = st.text_area(
+        "Recommended next step",
+        key=f"general-recommendation-{report_id}",
+        placeholder="Document follow-up, additional imaging, or referral.",
+    )
+    clinician_confirmed = st.checkbox(
+        "I am a qualified healthcare professional and I reviewed the original image.",
+        key=f"general-confirmed-{report_id}",
+    )
+    if st.button(
+        "Add clinician assessment to report",
+        width="stretch",
+        key=f"general-save-{report_id}",
+    ):
+        if not clinician_confirmed:
+            st.warning("Qualified-clinician confirmation is required.")
+        elif not impression.strip():
+            st.warning("Enter a clinical impression or diagnosis before saving.")
+        else:
+            result["payload"]["clinician_review"] = {
+                "status": "reviewed",
+                "observations": observations.strip(),
+                "impression": impression.strip(),
+                "recommendation": recommendation.strip(),
+                "reviewed_at": datetime.now(timezone.utc).isoformat(),
+            }
+            st.success("Clinician assessment added to this session report.")
+
     with st.expander("Technical quality details"):
         quality_rows = [
             {
@@ -728,25 +816,27 @@ def general_imaging_page():
         ]
         st.dataframe(pd.DataFrame(quality_rows), hide_index=True, width="stretch")
 
-    summary = {
-        "imaging_type": result["modality"],
-        "technical_quality": quality,
-        "visible_edge_area_percent": result["edge_area_percent"],
-        "interpretation": "No diagnosis generated; clinician review required.",
-    }
-    download_a, download_b = st.columns(2)
+    st.subheader("Download report", anchor=False)
+    download_a, download_b, download_c = st.columns(3)
     download_a.download_button(
-        "Download enhanced image",
-        encode_png(result["enhanced"]),
-        file_name="probstrip-enhanced-image.png",
-        mime="image/png",
+        "Download patient report",
+        general_report_as_html(result["payload"]),
+        file_name=f"{report_id}-patient-report.html",
+        mime="text/html",
         width="stretch",
     )
     download_b.download_button(
-        "Download review summary",
-        json.dumps(summary, indent=2),
-        file_name="probstrip-image-review.json",
+        "Download clinical data",
+        general_report_as_json(result["payload"]),
+        file_name=f"{report_id}-clinical-data.json",
         mime="application/json",
+        width="stretch",
+    )
+    download_c.download_button(
+        "Download enhanced image",
+        encode_png(result["enhanced"]),
+        file_name=f"{report_id}-enhanced.png",
+        mime="image/png",
         width="stretch",
     )
 
@@ -857,6 +947,8 @@ def clinician_page():
     st.json(case["payload"]["research_measures"], expanded=False)
 
     note_key = f"note-{selected}"
+    impression_key = f"impression-{selected}"
+    recommendation_key = f"recommendation-{selected}"
     sign_key = f"sign-{selected}"
     candidate_mask = None
     if case["prediction"] is not None:
@@ -974,6 +1066,16 @@ def clinician_page():
         key=note_key,
         placeholder="Document image limitations, corrections, or follow-up here.",
     )
+    st.text_input(
+        "Clinical impression or diagnosis",
+        key=impression_key,
+        placeholder="Optional clinician-entered interpretation of the original image.",
+    )
+    st.text_area(
+        "Recommended next step",
+        key=recommendation_key,
+        placeholder="Document follow-up, referral, or additional testing.",
+    )
     st.checkbox("Reviewed by a qualified clinician", key=sign_key)
     save_review = st.button(
         "Save clinician review",
@@ -991,6 +1093,8 @@ def clinician_page():
         case["payload"]["clinician_review"] = {
             "status": "reviewed",
             "note": st.session_state.get(note_key, ""),
+            "impression": st.session_state.get(impression_key, "").strip(),
+            "recommendation": st.session_state.get(recommendation_key, "").strip(),
             "reviewed_at": datetime.now(timezone.utc).isoformat(),
             "correction": correction_details if candidate_mask is not None else None,
             "reviewed_research_measures": (
@@ -1098,7 +1202,6 @@ def main():
             [
                 "Review image",
                 "Camera and live",
-                "X-ray and other imaging",
                 "Compare visits",
                 "Clinician details",
                 "Safety and privacy",
@@ -1153,8 +1256,6 @@ def main():
         analyze_page(settings, language)
     elif page == "Camera and live":
         camera_page(settings, language)
-    elif page == "X-ray and other imaging":
-        general_imaging_page()
     elif page == "Compare visits":
         compare_page()
     elif page == "Clinician details":

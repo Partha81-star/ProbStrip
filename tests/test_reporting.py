@@ -60,3 +60,19 @@ def test_reviewed_measure_is_used_in_clinician_exports():
 
     assert fhir["contained"][0]["valueQuantity"]["value"] == 7.25
     assert "Clinician review" in html
+
+
+def test_clinician_impression_is_used_in_html_and_fhir_reports():
+    payload = _payload()
+    payload["clinician_review"] = {
+        "status": "reviewed",
+        "impression": "Clinician-entered retinal impression",
+        "recommendation": "Arrange follow-up.",
+        "note": "Reviewed against original image.",
+    }
+
+    fhir = json.loads(report_as_fhir(payload))
+    html = report_as_html(payload)
+
+    assert "Clinician-entered retinal impression" in html
+    assert fhir["conclusion"] == "Clinician-entered retinal impression"

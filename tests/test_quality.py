@@ -53,3 +53,18 @@ def test_quality_result_is_serializable():
         "Retake recommended",
     }
     assert len(payload["checks"]) == 5
+
+
+def test_one_failed_check_allows_cautious_mapping_when_rest_are_strong():
+    image = np.zeros((256, 256, 3), dtype=np.uint8)
+    cv2.circle(image, (128, 128), 105, (170, 90, 35), thickness=-1)
+    cv2.circle(image, (128, 128), 45, (255, 255, 255), thickness=-1)
+    for offset in range(-70, 71, 20):
+        cv2.line(image, (45, 128 + offset), (210, 128 - offset), (60, 22, 10), 2)
+
+    result = assess_image_quality(image)
+    retakes = sum(check.status == "Retake" for check in result.checks)
+
+    assert retakes == 1
+    assert result.score >= 55
+    assert result.status == "Usable with caution"

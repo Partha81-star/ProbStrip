@@ -143,10 +143,11 @@ def assess_image_quality(image: np.ndarray) -> ImageQualityResult:
     points = {"Good": 20, "Review": 11, "Retake": 2}
     score = int(round(sum(points[check.status] for check in checks)))
     statuses = {check.status for check in checks}
-    if "Retake" in statuses or score < 55:
+    retake_count = sum(check.status == "Retake" for check in checks)
+    if retake_count >= 2 or score < 55:
         status = "Retake recommended"
         summary = "The image may not be reliable enough for vessel mapping."
-    elif "Review" in statuses or score < 82:
+    elif retake_count == 1 or "Review" in statuses or score < 82:
         status = "Usable with caution"
         summary = "The image can be mapped, but a clinician should review its quality."
     else:

@@ -8,8 +8,9 @@ def test_initial_patient_screen_renders_without_exception():
     app = AppTest.from_file(app_path, default_timeout=30).run()
 
     assert not app.exception
-    assert app.header[0].value == "Review a retinal image"
+    assert app.header[0].value == "Review a medical image"
     assert "not a medical diagnosis" in app.checkbox[0].label
+    assert "Use camera" in app.radio[0].options
 
 
 def test_camera_screen_is_lazy_and_mobile_capture_is_available():
@@ -26,17 +27,18 @@ def test_camera_screen_is_lazy_and_mobile_capture_is_available():
     assert app.toggle[0].value is False
 
 
-def test_general_imaging_screen_supports_upload_and_camera_sources():
+def test_review_screen_supports_general_imaging_categories():
     app_path = Path(__file__).resolve().parents[1] / "app.py"
     app = AppTest.from_file(app_path, default_timeout=30).run()
-    navigation = next(
-        radio for radio in app.radio if "X-ray and other imaging" in radio.options
+    category = next(
+        selectbox
+        for selectbox in app.selectbox
+        if "Bone or joint X-ray" in selectbox.options
     )
 
-    navigation.set_value("X-ray and other imaging")
+    category.set_value("Bone or joint X-ray")
     app.run()
 
     assert not app.exception
-    assert app.header[0].value == "X-ray and other imaging"
-    assert "Bone or joint X-ray" in app.selectbox[0].options
+    assert app.header[0].value == "Review a medical image"
     assert len(app.get("file_uploader")) == 1

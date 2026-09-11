@@ -4,10 +4,11 @@ ProbStrip is a research medical-image review application. Its retinal workflow c
 StripConv U-Net with Monte Carlo dropout to create a vessel map and highlight
 areas where repeated model passes disagree.
 
-It also includes a separate non-AI image-review workspace for bone and chest
-X-rays, CT, MRI, ultrasound, and external photographs. That workspace provides
-technical quality feedback, contrast enhancement, and structure-edge views. It
-does not reuse the retinal model or claim to identify disease.
+The same Review image screen includes a non-AI workflow for bone and chest
+X-rays, CT, MRI, ultrasound, and external photographs. It provides technical
+quality feedback, contrast enhancement, structure-edge views, and downloadable
+patient and clinical reports. A qualified clinician can record an impression
+in the report. It does not reuse the retinal model or invent a diagnosis.
 
 The public interface is designed for patients and clinicians to review the same
 result at different levels of detail. It deliberately does **not** generate a
@@ -15,18 +16,19 @@ medical diagnosis.
 
 ## Current workflow
 
-1. Upload a fundus-camera retinal photograph or use the included demonstration.
-2. Check brightness, contrast, sharpness, glare, and retinal framing.
-3. Stop and recommend a retake when capture quality is inadequate.
-4. Produce a teal vessel overlay and mark uncertain areas in amber.
-5. Explain the result in patient-friendly English or Hindi.
-6. Download an easy-to-read HTML report, technical JSON, or preliminary
+1. Select retinal, X-ray, CT, MRI, ultrasound, or external imaging on **Review image**.
+2. Upload an image, capture one with the device camera, or use the retinal demonstration.
+3. Check modality-appropriate technical image quality.
+4. For retinal images, produce a teal vessel overlay and mark uncertain areas in amber.
+5. For other images, create contrast-enhanced and structure-edge review views.
+6. Explain the result in patient-friendly language.
+7. Download an easy-to-read HTML report, technical JSON, or preliminary
    FHIR-shaped JSON.
-7. Compare research measurements from two usable images in the current session.
-8. Capture a still image on a phone or preview a live vessel overlay with WebRTC.
-9. Refine or replace a vessel mask in the clinician review workspace.
-10. Register two visits before showing a guarded vessel-map change view.
-11. Enhance and inspect de-identified X-ray and other medical-image exports.
+8. Compare retinal research measurements from two usable images in the current session.
+9. Capture a still image on a phone or preview a live retinal overlay with WebRTC.
+10. Refine or replace a vessel mask in the clinician review workspace.
+11. Add a qualified-clinician impression to a general-imaging report.
+12. Register two retinal visits before showing a guarded vessel-map change view.
 
 ## Safety and intended use
 

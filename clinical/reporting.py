@@ -50,9 +50,16 @@ def report_as_html(payload):
     review_block = ""
     if clinician_review.get("status") == "reviewed":
         note = html.escape(clinician_review.get("note") or "No note provided.")
+        impression = html.escape(
+            clinician_review.get("impression") or "No diagnosis entered."
+        )
+        recommendation = html.escape(
+            clinician_review.get("recommendation") or "Follow local clinical guidance."
+        )
         review_block = (
-            "<h2>Clinician review</h2><p><strong>Reviewed in this session.</strong> "
-            f"{note}</p>"
+            "<h2>Clinician review</h2><p><strong>Impression or diagnosis:</strong> "
+            f"{impression}</p><p><strong>Note:</strong> {note}</p>"
+            f"<p><strong>Recommended next step:</strong> {recommendation}</p>"
         )
     checks = "".join(
         "<tr><td>{}</td><td>{:.1f} {}</td><td>{}</td></tr>".format(
@@ -128,7 +135,7 @@ def report_as_fhir(payload):
             "category": [{"text": "Research retinal image analysis"}],
             "code": {"text": "Retinal vessel mapping (research use only)"},
             "effectiveDateTime": payload["created_at"],
-            "conclusion": payload["diagnosis_message"],
+            "conclusion": review.get("impression") or payload["diagnosis_message"],
             "note": notes,
             "result": [{"reference": "#visible-vessel-coverage"}],
             "contained": [
