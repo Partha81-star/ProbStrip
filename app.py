@@ -19,6 +19,7 @@ from clinical.analysis import (
     review_outcome,
 )
 from clinical.biomarkers import calculate_vascular_biomarkers, reviewed_mask
+from clinical.modalities import MODALITIES, analyze_general_image
 from clinical.quality import assess_image_quality
 from clinical.registration import register_followup, vessel_change_map
 from clinical.live import LiveVesselProcessor
@@ -92,7 +93,7 @@ st.markdown(
 
 PATIENT_TEXT = {
     "English": {
-        "no_diagnosis": "No diagnosis was generated",
+        "no_diagnosis": "Research vessel analysis only",
         "no_diagnosis_body": (
             "ProbStrip maps visible blood vessels and marks places where the software "
             "is unsure. It cannot tell whether you have an eye disease."
@@ -186,6 +187,27 @@ def decode_image(image_bytes: bytes):
     if bgr is None:
         raise ValueError("This file could not be read as an image.")
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
+
+
+def encode_png(image: np.ndarray) -> bytes:
+    if image.ndim == 3:
+        image = cv2.cvtColor(image, cv2.COLOR_RGB2BGR)
+    ok, encoded = cv2.imencode(".png", image)
+    if not ok:
+        raise ValueError("The processed image could not be exported.")
+    return encoded.tobytes()
+
+
+def resize_for_review(image: np.ndarray, maximum_side: int = 1400) -> np.ndarray:
+    height, width = image.shape[:2]
+    scale = min(1.0, maximum_side / max(height, width))
+    if scale == 1.0:
+        return image
+    return cv2.resize(
+        image,
+        (max(1, round(width * scale)), max(1, round(height * scale))),
+        interpolation=cv2.INTER_AREA,
+    )
 
 
 @st.cache_data(show_spinner=False)
@@ -588,6 +610,147 @@ def camera_page(settings, language):
             st.caption("Enable live webcam when you are ready to grant camera access.")
 
 
+def general_imaging_page():
+    st.header("X-ray and other imaging", anchor=False)
+    st.write(
+        "Improve visibility and review image structure from common medical images. "
+        "This workspace does not detect fractures, tumors, infections, or other disease."
+    )
+    st.markdown(
+        '<div class="safety-bar"><strong>Clinician interpretation is required.</strong> '
+        "The enhanced and teal edge views are visual aids, not diagnostic findings.</div>",
+        unsafe_allow_html=True,
+    )
+
+    modality = st.selectbox("Imaging type", list(MODALITIES))
+    modality_info = MODALITIES[modality]
+    st.caption(modality_info["guidance"])
+    source = st.segmented_control(
+        "Image source",
+        ["Upload image", "Use camera"],
+        default="Upload image",
+        width="stretch",
+    )
+    media = None
+    if source == "Use camera":
+        st.info(
+            "Photographing an X-ray film or screen can add glare and distortion. "
+            "An original de-identified digital export is more reliable."
+        )
+        media = st.camera_input(f"Photograph the {modality_info['short']}")
+    else:
+        media = st.file_uploader(
+            f"Upload {modality_info['short']}",
+            type=["png", "jpg", "jpeg", "tif", "tiff"],
+            key="general-imaging-upload",
+            help="Use a de-identified PNG, JPEG, or TIFF export. DICOM is not supported in this release.",
+        )
+
+    with st.expander("Image display controls"):
+        control_a, control_b = st.columns(2)
+        clip_limit = control_a.slider(
+            "Contrast enhancement", 1.0, 5.0, 2.5, 0.5
+        )
+        edge_sensitivity = control_b.slider(
+            "Structure-edge sensitivity", 0.5, 2.0, 1.0, 0.1
+        )
+        invert = st.toggle(
+            "Invert black and white",
+            help="Useful when the exported radiograph uses the opposite display convention.",
+        )
+
+    consent = st.checkbox(
+        "I understand these are image-review aids and not a medical diagnosis.",
+        key="general-imaging-consent",
+    )
+    process = st.button(
+        "Create image review",
+        type="primary",
+        width="stretch",
+        disabled=media is None,
+    )
+    if process:
+        if not consent:
+            st.warning("Confirm the intended use before creating the image review.")
+        else:
+            try:
+                original = resize_for_review(decode_image(media.getvalue()))
+                result = analyze_general_image(
+                    original,
+                    modality,
+                    clip_limit=clip_limit,
+                    edge_sensitivity=edge_sensitivity,
+                    invert=invert,
+                )
+                result["original"] = original
+                st.session_state.general_image_review = result
+            except ValueError as exc:
+                st.error(str(exc))
+
+    result = st.session_state.get("general_image_review")
+    if result is None:
+        return
+    if result["modality"] != modality:
+        st.info("Create a new review to apply the selected imaging type.")
+        return
+
+    quality = result["quality"]
+    st.subheader(f"{result['modality']} review", anchor=False)
+    metric_a, metric_b, metric_c = st.columns(3)
+    metric_a.metric("Technical quality", f"{quality['score']}/100")
+    metric_b.metric("Quality status", quality["status"])
+    metric_c.metric(
+        "Visible edge area",
+        f"{result['edge_area_percent']:.1f}%",
+        help="The amount of edge contrast in this image, not an abnormality score.",
+    )
+    original_col, enhanced_col = st.columns(2)
+    original_col.image(result["original"], caption="Original image", width="stretch")
+    enhanced_col.image(
+        result["enhanced"],
+        caption="Contrast-enhanced grayscale view",
+        width="stretch",
+        clamp=True,
+    )
+    st.image(
+        result["overlay"],
+        caption="Teal marks visible intensity edges. It does not mark fractures or disease.",
+        width="stretch",
+    )
+    with st.expander("Technical quality details"):
+        quality_rows = [
+            {
+                "Check": check["name"],
+                "Measured value": f"{check['value']:.1f} {check['unit']}",
+                "Result": "Pass" if check["ok"] else "Review",
+            }
+            for check in quality["checks"]
+        ]
+        st.dataframe(pd.DataFrame(quality_rows), hide_index=True, width="stretch")
+
+    summary = {
+        "imaging_type": result["modality"],
+        "technical_quality": quality,
+        "visible_edge_area_percent": result["edge_area_percent"],
+        "interpretation": "No diagnosis generated; clinician review required.",
+    }
+    download_a, download_b = st.columns(2)
+    download_a.download_button(
+        "Download enhanced image",
+        encode_png(result["enhanced"]),
+        file_name="probstrip-enhanced-image.png",
+        mime="image/png",
+        width="stretch",
+    )
+    download_b.download_button(
+        "Download review summary",
+        json.dumps(summary, indent=2),
+        file_name="probstrip-image-review.json",
+        mime="application/json",
+        width="stretch",
+    )
+
+
 def compare_page():
     st.header("Compare visits", anchor=False)
     st.write(
@@ -868,13 +1031,16 @@ def safety_page():
     st.subheader("What ProbStrip does", anchor=False)
     st.write(
         "It checks basic capture quality, creates a retinal blood-vessel segmentation, "
-        "and highlights pixels where repeated stochastic model passes disagree."
+        "and highlights pixels where repeated stochastic model passes disagree. The "
+        "general imaging workspace can enhance contrast and show intensity edges in "
+        "X-rays, CT, MRI, ultrasound, and external photographs."
     )
     st.subheader("What ProbStrip does not do", anchor=False)
     st.write(
-        "It does not detect or rule out a disease, prescribe treatment, replace an eye "
-        "examination, or provide emergency advice. The current checkpoint was developed "
-        "from a small research dataset and has not been prospectively validated."
+        "It does not detect or rule out a disease, fracture, or lesion; prescribe "
+        "treatment; replace a clinical examination; or provide emergency advice. The "
+        "current AI checkpoint is retinal-only, was developed from a small research "
+        "dataset, and has not been prospectively validated."
     )
     st.subheader("Privacy in this release", anchor=False)
     st.write(
@@ -899,6 +1065,8 @@ def main():
         st.session_state.cases = []
     if "active_case" not in st.session_state:
         st.session_state.active_case = None
+    if "general_image_review" not in st.session_state:
+        st.session_state.general_image_review = None
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     checkpoint = os.getenv("PROBSTRIP_CHECKPOINT", str(DEFAULT_CHECKPOINT))
@@ -923,13 +1091,14 @@ def main():
     with st.sidebar:
         st.markdown('<div class="brand">ProbStrip</div>', unsafe_allow_html=True)
         st.markdown(
-            '<div class="brand-sub">Retinal vessel review</div>', unsafe_allow_html=True
+            '<div class="brand-sub">Medical image review</div>', unsafe_allow_html=True
         )
         page = st.radio(
             "Navigation",
             [
                 "Review image",
                 "Camera and live",
+                "X-ray and other imaging",
                 "Compare visits",
                 "Clinician details",
                 "Safety and privacy",
@@ -961,11 +1130,12 @@ def main():
             )
         st.caption(f"Compute: {device.upper()} | Session reports: {len(st.session_state.cases)}")
         st.caption(f"Model: {checkpoint_sha256[:12]}")
-        if st.session_state.cases and st.button(
-            "Clear all session reports", width="stretch"
+        if (st.session_state.cases or st.session_state.general_image_review) and st.button(
+            "Clear all session images and reports", width="stretch"
         ):
             st.session_state.cases = []
             st.session_state.active_case = None
+            st.session_state.general_image_review = None
             st.rerun()
 
     settings = {
@@ -983,6 +1153,8 @@ def main():
         analyze_page(settings, language)
     elif page == "Camera and live":
         camera_page(settings, language)
+    elif page == "X-ray and other imaging":
+        general_imaging_page()
     elif page == "Compare visits":
         compare_page()
     elif page == "Clinician details":

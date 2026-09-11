@@ -24,3 +24,19 @@ def test_camera_screen_is_lazy_and_mobile_capture_is_available():
     assert app.header[0].value == "Camera and live preview"
     assert len(app.get("camera_input")) == 1
     assert app.toggle[0].value is False
+
+
+def test_general_imaging_screen_supports_upload_and_camera_sources():
+    app_path = Path(__file__).resolve().parents[1] / "app.py"
+    app = AppTest.from_file(app_path, default_timeout=30).run()
+    navigation = next(
+        radio for radio in app.radio if "X-ray and other imaging" in radio.options
+    )
+
+    navigation.set_value("X-ray and other imaging")
+    app.run()
+
+    assert not app.exception
+    assert app.header[0].value == "X-ray and other imaging"
+    assert "Bone or joint X-ray" in app.selectbox[0].options
+    assert len(app.get("file_uploader")) == 1

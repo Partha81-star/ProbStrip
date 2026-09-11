@@ -1,8 +1,13 @@
 # ProbStrip
 
-ProbStrip is a research retinal-vessel review application. It combines a
+ProbStrip is a research medical-image review application. Its retinal workflow combines a
 StripConv U-Net with Monte Carlo dropout to create a vessel map and highlight
 areas where repeated model passes disagree.
+
+It also includes a separate non-AI image-review workspace for bone and chest
+X-rays, CT, MRI, ultrasound, and external photographs. That workspace provides
+technical quality feedback, contrast enhancement, and structure-edge views. It
+does not reuse the retinal model or claim to identify disease.
 
 The public interface is designed for patients and clinicians to review the same
 result at different levels of detail. It deliberately does **not** generate a
@@ -21,6 +26,7 @@ medical diagnosis.
 8. Capture a still image on a phone or preview a live vessel overlay with WebRTC.
 9. Refine or replace a vessel mask in the clinician review workspace.
 10. Register two visits before showing a guarded vessel-map change view.
+11. Enhance and inspect de-identified X-ray and other medical-image exports.
 
 ## Safety and intended use
 
@@ -104,6 +110,7 @@ in offline scripts and is intentionally absent from the public interface.
 
 ```text
 app.py                         Patient and clinician Streamlit experience
+clinical/modalities.py         Multi-modality quality and structure views
 clinical/quality.py            Acquisition-quality gate
 clinical/analysis.py           Visuals, research measurements, review outcome
 clinical/reporting.py          HTML, JSON, and preliminary FHIR exports

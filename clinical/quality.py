@@ -26,26 +26,47 @@ class ImageQualityResult:
         return result
 
 
-def _largest_foreground_mask(gray: np.ndarray) -> np.ndarray:
-    threshold = max(5, int(np.percentile(gray, 2)))
-    candidate = (gray > threshold).astype(np.uint8) * 255
+def _largest_component_mask(candidate: np.ndarray) -> np.ndarray | None:
+    candidate = candidate.astype(np.uint8) * 255
+    kernel_size = max(3, int(round(min(candidate.shape) * 0.01)) | 1)
     candidate = cv2.morphologyEx(
-        candidate, cv2.MORPH_CLOSE, np.ones((9, 9), np.uint8)
+        candidate,
+        cv2.MORPH_CLOSE,
+        np.ones((kernel_size, kernel_size), np.uint8),
     )
     contours, _ = cv2.findContours(
         candidate, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE
     )
     if not contours:
-        return np.ones_like(gray, dtype=bool)
+        return None
     largest = max(contours, key=cv2.contourArea)
-    mask = np.zeros_like(gray, dtype=np.uint8)
+    mask = np.zeros_like(candidate, dtype=np.uint8)
     cv2.drawContours(mask, [largest], -1, 255, thickness=cv2.FILLED)
     return mask > 0
 
 
-def retinal_field_mask(image: np.ndarray) -> np.ndarray:
+def _largest_foreground_mask(image: np.ndarray) -> np.ndarray:
     gray = _to_gray(image)
-    return _largest_foreground_mask(gray)
+
+    # Fundus photographs are chromatic while screenshot borders and labels are
+    # usually white, gray, or black. Starting with saturation prevents those
+    # borders from being joined to the retinal field during morphology.
+    if image.ndim == 3 and image.shape[2] == 3:
+        hsv = cv2.cvtColor(image.astype(np.uint8), cv2.COLOR_RGB2HSV)
+        chromatic = (hsv[:, :, 1] >= 20) & (hsv[:, :, 2] >= 12)
+        color_mask = _largest_component_mask(chromatic)
+        if color_mask is not None and float(color_mask.mean()) >= 0.08:
+            return color_mask
+
+    threshold = max(5, int(np.percentile(gray, 2)))
+    intensity_mask = _largest_component_mask(gray > threshold)
+    if intensity_mask is None:
+        return np.ones_like(gray, dtype=bool)
+    return intensity_mask
+
+
+def retinal_field_mask(image: np.ndarray) -> np.ndarray:
+    return _largest_foreground_mask(image)
 
 
 def _to_gray(image: np.ndarray) -> np.ndarray:
@@ -67,7 +88,7 @@ def _check(name, value, unit, good, acceptable, guidance):
 def assess_image_quality(image: np.ndarray) -> ImageQualityResult:
     """Estimate acquisition quality without making a clinical judgment."""
     gray = _to_gray(image)
-    field = _largest_foreground_mask(gray)
+    field = _largest_foreground_mask(image)
     pixels = gray[field] if np.any(field) else gray.reshape(-1)
 
     brightness = float(np.mean(pixels) / 255.0)
@@ -133,4 +154,3 @@ def assess_image_quality(image: np.ndarray) -> ImageQualityResult:
         summary = "The image passed the automated capture-quality checks."
 
     return ImageQualityResult(score, status, summary, checks)
-

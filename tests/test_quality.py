@@ -24,6 +24,22 @@ def test_fundus_field_mask_finds_circular_image_area():
     assert not mask[0, 0]
 
 
+def test_fundus_field_ignores_white_screenshot_border():
+    image = np.full((300, 360, 3), 245, dtype=np.uint8)
+    image[:, 20:340] = 3
+    cv2.circle(image, (180, 150), 130, (225, 92, 20), thickness=-1)
+    cv2.circle(image, (180, 150), 75, (190, 65, 18), thickness=-1)
+    cv2.circle(image, (265, 135), 18, (250, 185, 75), thickness=-1)
+    cv2.line(image, (70, 150), (285, 125), (85, 30, 15), thickness=4)
+
+    result = assess_image_quality(image)
+    framing = next(check for check in result.checks if check.name == "Retina framing")
+
+    assert 45 < framing.value < 75
+    assert framing.status == "Good"
+    assert result.status != "Retake recommended"
+
+
 def test_quality_result_is_serializable():
     image = np.zeros((128, 128, 3), dtype=np.uint8)
     cv2.circle(image, (64, 64), 52, (80, 110, 75), thickness=-1)
@@ -37,4 +53,3 @@ def test_quality_result_is_serializable():
         "Retake recommended",
     }
     assert len(payload["checks"]) == 5
-

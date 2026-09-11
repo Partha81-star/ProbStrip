@@ -15,6 +15,12 @@ retinal-vessel segmentation experiments. ProbStrip may help a researcher or
 qualified clinician inspect a proposed vessel map and identify regions where
 the model is unstable across stochastic passes.
 
+The application also contains a deterministic image-review workspace for
+X-ray, CT, MRI, ultrasound, and external-photo exports. That workspace performs
+technical quality checks, local contrast enhancement, and intensity-edge
+visualization only. It does not use this retinal checkpoint and is not an
+anatomy, fracture, lesion, or disease detector.
+
 ## Prohibited use
 
 Do not use this checkpoint to diagnose, exclude, triage, or treat disease. Do
