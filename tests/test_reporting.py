@@ -1,7 +1,10 @@
 import json
+from io import BytesIO
 
 import numpy as np
+from pypdf import PdfReader
 
+from clinical.pdf_reporting import retinal_report_as_pdf
 from clinical.quality import assess_image_quality
 from clinical.reporting import (
     make_report_payload,
@@ -76,3 +79,17 @@ def test_clinician_impression_is_used_in_html_and_fhir_reports():
 
     assert "Clinician-entered retinal impression" in html
     assert fhir["conclusion"] == "Clinician-entered retinal impression"
+
+
+def test_patient_pdf_is_valid_and_contains_safety_content():
+    payload = _payload()
+    image = np.full((128, 128, 3), 110, dtype=np.uint8)
+
+    pdf = retinal_report_as_pdf(payload, image, image)
+    reader = PdfReader(BytesIO(pdf))
+    text = "\n".join(page.extract_text() or "" for page in reader.pages)
+
+    assert pdf.startswith(b"%PDF-")
+    assert len(reader.pages) >= 1
+    assert "No automated diagnosis was generated" in text
+    assert "Image-quality checks" in text

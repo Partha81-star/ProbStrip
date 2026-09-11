@@ -30,4 +30,5 @@ wheels/
 .coverage
 htmlcov/
 evaluation_results/
+/output/pdf/
 .streamlit/secrets.toml

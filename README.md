@@ -22,8 +22,8 @@ medical diagnosis.
 4. For retinal images, produce a teal vessel overlay and mark uncertain areas in amber.
 5. For other images, create contrast-enhanced and structure-edge review views.
 6. Explain the result in patient-friendly language.
-7. Download an easy-to-read HTML report, technical JSON, or preliminary
-   FHIR-shaped JSON.
+7. Download a printable PDF with the reviewed images and quality details, an
+   HTML report, technical JSON, or preliminary FHIR-shaped JSON.
 8. Compare retinal research measurements from two usable images in the current session.
 9. Capture a still image on a phone or preview a live retinal overlay with WebRTC.
 10. Refine or replace a vessel mask in the clinician review workspace.
@@ -116,6 +116,7 @@ clinical/modalities.py         Multi-modality quality and structure views
 clinical/quality.py            Acquisition-quality gate
 clinical/analysis.py           Visuals, research measurements, review outcome
 clinical/reporting.py          HTML, JSON, and preliminary FHIR exports
+clinical/pdf_reporting.py      Printable patient and clinician PDF reports
 clinical/live.py               Throttled real-time WebRTC frame processor
 clinical/biomarkers.py         Vessel morphology and mask refinement
 clinical/registration.py       Guarded affine visit registration and change maps

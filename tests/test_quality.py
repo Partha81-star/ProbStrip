@@ -1,7 +1,12 @@
 import cv2
 import numpy as np
 
-from clinical.quality import assess_image_quality, retinal_field_mask
+from clinical.quality import (
+    QualityCheck,
+    assess_image_quality,
+    retinal_field_mask,
+    summarize_quality,
+)
 
 
 def test_blank_image_is_stopped_by_quality_gate():
@@ -68,3 +73,16 @@ def test_one_failed_check_allows_cautious_mapping_when_rest_are_strong():
     assert retakes == 1
     assert result.score >= 55
     assert result.status == "Usable with caution"
+
+
+def test_high_score_can_never_be_labeled_retake():
+    checks = tuple(
+        QualityCheck(f"Check {index}", 0, "score", status, "Review capture.")
+        for index, status in enumerate(
+            ["Retake", "Retake", "Good", "Good", "Good"], start=1
+        )
+    )
+
+    status, _ = summarize_quality(checks, score=82)
+
+    assert status == "Usable with caution"

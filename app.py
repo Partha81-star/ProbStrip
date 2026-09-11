@@ -20,12 +20,12 @@ from clinical.analysis import (
 )
 from clinical.biomarkers import calculate_vascular_biomarkers, reviewed_mask
 from clinical.general_reporting import (
-    general_report_as_html,
     general_report_as_json,
     make_general_report_payload,
 )
 from clinical.modalities import MODALITIES, analyze_general_image
-from clinical.quality import assess_image_quality
+from clinical.pdf_reporting import general_report_as_pdf, retinal_report_as_pdf
+from clinical.quality import QUALITY_POLICY_VERSION, assess_image_quality
 from clinical.registration import register_followup, vessel_change_map
 from clinical.live import LiveVesselProcessor
 from clinical.reporting import (
@@ -377,6 +377,12 @@ def render_patient_result(case, language):
     translated_title = text.get(outcome["level"], outcome["title"])
     translated_body = text[f'{outcome["level"]}_body']
     translated_next = text[f'{outcome["level"]}_next']
+    result_policy = getattr(case["quality"], "policy_version", "legacy")
+    if result_policy != QUALITY_POLICY_VERSION:
+        st.info(
+            "This result was created with an older image-quality policy. Analyze the "
+            "image again to apply the current scoring rules."
+        )
     st.markdown(
         f'<div class="safety-bar"><strong>{text["no_diagnosis"]}</strong><br>'
         f'{text["no_diagnosis_body"]}</div>',
@@ -410,6 +416,11 @@ def render_patient_result(case, language):
     if case["prediction"] is None:
         m2.metric("Vessel map", "Not created")
         m3.metric("Software confidence", "Not available")
+        failed_checks = [
+            check.name for check in case["quality"].checks if check.status == "Retake"
+        ]
+        if failed_checks:
+            st.warning("Mapping stopped because: " + ", ".join(failed_checks) + ".")
     else:
         m2.metric(
             "Visible vessel coverage",
@@ -456,15 +467,26 @@ def render_patient_result(case, language):
         st.dataframe(quality_table(case["quality"]), hide_index=True, width="stretch")
 
     st.subheader("Take this report to your clinician", anchor=False)
-    d1, d2 = st.columns(2)
+    d1, d2, d3 = st.columns(3)
     d1.download_button(
-        "Download easy-to-read report",
+        "Download PDF report",
+        retinal_report_as_pdf(
+            case["payload"],
+            case["display"],
+            case.get("reviewed_overlay", case.get("overlay")),
+        ),
+        file_name=f"{case['case_id']}-patient-report.pdf",
+        mime="application/pdf",
+        width="stretch",
+    )
+    d2.download_button(
+        "Download HTML report",
         report_as_html(case["payload"]),
         file_name=f"{case['case_id']}-patient-report.html",
         mime="text/html",
         width="stretch",
     )
-    d2.download_button(
+    d3.download_button(
         "Download clinical data",
         report_as_json(case["payload"]),
         file_name=f"{case['case_id']}-clinical-data.json",
@@ -819,10 +841,12 @@ def general_imaging_page(modality):
     st.subheader("Download report", anchor=False)
     download_a, download_b, download_c = st.columns(3)
     download_a.download_button(
-        "Download patient report",
-        general_report_as_html(result["payload"]),
-        file_name=f"{report_id}-patient-report.html",
-        mime="text/html",
+        "Download PDF report",
+        general_report_as_pdf(
+            result["payload"], result["original"], result["overlay"]
+        ),
+        file_name=f"{report_id}-patient-report.pdf",
+        mime="application/pdf",
         width="stretch",
     )
     download_b.download_button(
@@ -1103,15 +1127,26 @@ def clinician_page():
         }
         st.success("Review status is stored for this session and included in new downloads.")
 
-    d1, d2 = st.columns(2)
+    d1, d2, d3 = st.columns(3)
     d1.download_button(
+        "Download reviewed PDF",
+        retinal_report_as_pdf(
+            case["payload"],
+            case["display"],
+            case.get("reviewed_overlay", case.get("overlay")),
+        ),
+        file_name=f"{selected}-reviewed-report.pdf",
+        mime="application/pdf",
+        width="stretch",
+    )
+    d2.download_button(
         "Download technical JSON",
         report_as_json(case["payload"]),
         file_name=f"{selected}-technical.json",
         mime="application/json",
         width="stretch",
     )
-    d2.download_button(
+    d3.download_button(
         "Download preliminary FHIR JSON",
         report_as_fhir(case["payload"]),
         file_name=f"{selected}-fhir.json",

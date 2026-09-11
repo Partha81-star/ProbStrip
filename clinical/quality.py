@@ -3,6 +3,8 @@ from dataclasses import asdict, dataclass
 import cv2
 import numpy as np
 
+QUALITY_POLICY_VERSION = "2026.09.11"
+
 
 @dataclass(frozen=True)
 class QualityCheck:
@@ -19,6 +21,7 @@ class ImageQualityResult:
     status: str
     summary: str
     checks: tuple[QualityCheck, ...]
+    policy_version: str = QUALITY_POLICY_VERSION
 
     def to_dict(self):
         result = asdict(self)
@@ -85,6 +88,31 @@ def _check(name, value, unit, good, acceptable, guidance):
     return QualityCheck(name, float(value), unit, status, guidance)
 
 
+def summarize_quality(checks, score):
+    retake_checks = [check.name for check in checks if check.status == "Retake"]
+    review_checks = [check.name for check in checks if check.status == "Review"]
+    retake_count = len(retake_checks)
+
+    if score < 55 or (retake_count >= 2 and score < 75):
+        reasons = ", ".join(retake_checks or review_checks)
+        return (
+            "Retake recommended",
+            "Mapping was stopped because these capture checks need improvement: "
+            f"{reasons}.",
+        )
+    if retake_count >= 1 or review_checks or score < 82:
+        reasons = ", ".join(retake_checks + review_checks)
+        return (
+            "Usable with caution",
+            "The image can be mapped, but a clinician should review: "
+            f"{reasons or 'overall capture quality'}.",
+        )
+    return (
+        "Suitable for mapping",
+        "The image passed the automated capture-quality checks.",
+    )
+
+
 def assess_image_quality(image: np.ndarray) -> ImageQualityResult:
     """Estimate acquisition quality without making a clinical judgment."""
     gray = _to_gray(image)
@@ -142,16 +170,9 @@ def assess_image_quality(image: np.ndarray) -> ImageQualityResult:
 
     points = {"Good": 20, "Review": 11, "Retake": 2}
     score = int(round(sum(points[check.status] for check in checks)))
-    statuses = {check.status for check in checks}
-    retake_count = sum(check.status == "Retake" for check in checks)
-    if retake_count >= 2 or score < 55:
-        status = "Retake recommended"
-        summary = "The image may not be reliable enough for vessel mapping."
-    elif retake_count == 1 or "Review" in statuses or score < 82:
-        status = "Usable with caution"
-        summary = "The image can be mapped, but a clinician should review its quality."
-    else:
-        status = "Suitable for mapping"
-        summary = "The image passed the automated capture-quality checks."
+    # A high aggregate score must never produce a contradictory hard stop. Two
+    # genuinely poor checks can stop a low-scoring image, while a single weak
+    # check always allows mapping with an explicit caution.
+    status, summary = summarize_quality(checks, score)
 
     return ImageQualityResult(score, status, summary, checks)
