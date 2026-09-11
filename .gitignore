@@ -29,4 +29,5 @@ wheels/
 .pytest_cache/
 .coverage
 htmlcov/
+evaluation_results/
 .streamlit/secrets.toml

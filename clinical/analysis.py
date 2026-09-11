@@ -1,6 +1,7 @@
 import cv2
 import numpy as np
 
+from clinical.biomarkers import calculate_vascular_biomarkers
 from clinical.quality import retinal_field_mask
 
 
@@ -64,13 +65,15 @@ def calculate_research_measures(
         / max(int(central_field.sum()), 1)
     )
 
-    return {
+    measures = {
         "visible_vessel_coverage_percent": round(vessel_density * 100, 2),
         "central_vessel_coverage_percent": round(central_density * 100, 2),
         "low_confidence_area_percent": round(uncertainty_ratio * 100, 2),
         "mean_model_variance": round(float(np.mean(variance_map[field])), 7),
         "maximum_model_variance": round(float(np.max(variance_map[field])), 7),
     }
+    measures.update(calculate_vascular_biomarkers(rgb_image, binary_mask))
+    return measures
 
 
 def review_outcome(quality_status: str, low_confidence_percent: float):
@@ -103,4 +106,3 @@ def review_outcome(quality_status: str, low_confidence_percent: float):
         ),
         "next_step": "Discuss the image during your normal eye-care appointment.",
     }
-

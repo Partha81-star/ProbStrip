@@ -41,8 +41,19 @@ def report_as_json(payload):
 
 def report_as_html(payload):
     quality = payload["quality"]
-    measures = payload["research_measures"]
+    clinician_review = payload.get("clinician_review") or {}
+    measures = (
+        clinician_review.get("reviewed_research_measures")
+        or payload["research_measures"]
+    )
     outcome = payload["review_outcome"]
+    review_block = ""
+    if clinician_review.get("status") == "reviewed":
+        note = html.escape(clinician_review.get("note") or "No note provided.")
+        review_block = (
+            "<h2>Clinician review</h2><p><strong>Reviewed in this session.</strong> "
+            f"{note}</p>"
+        )
     checks = "".join(
         "<tr><td>{}</td><td>{:.1f} {}</td><td>{}</td></tr>".format(
             html.escape(check["name"]),
@@ -90,6 +101,7 @@ def report_as_html(payload):
 <body><h1>{strings['title']}</h1><small>Reference: {html.escape(payload['case_id'])}</small>
 <div class="notice"><strong>{strings['no_diagnosis']}</strong><br>{html.escape(payload['safety_notice'])}</div>
 <h2>{strings['your_result']}</h2><div class="result"><strong>{html.escape(outcome['title'])}</strong><p>{html.escape(outcome['explanation'])}</p><p><strong>{strings['next_step']}:</strong> {html.escape(outcome['next_step'])}</p></div>
+{review_block}
 <h2>{strings['quality']}</h2><p>{strings['score']}: {quality['score']}/100. {html.escape(quality['summary'])}</p>
 <table><thead><tr><th>Check</th><th>Value</th><th>Status</th></tr></thead><tbody>{checks}</tbody></table>
 <h2>{strings['research']}</h2><p>{strings['coverage']}: {measures['visible_vessel_coverage_percent']:.2f}%<br>{strings['uncertainty']}: {measures['low_confidence_area_percent']:.2f}%</p>
@@ -98,6 +110,16 @@ def report_as_html(payload):
 
 def report_as_fhir(payload):
     """Create a minimal research-only FHIR DiagnosticReport-shaped export."""
+    review = payload.get("clinician_review") or {}
+    measures = review.get("reviewed_research_measures") or payload["research_measures"]
+    notes = [{"text": payload["safety_notice"]}]
+    if review.get("status") == "reviewed":
+        notes.append(
+            {
+                "text": "Clinician session review: "
+                + (review.get("note") or "No note provided.")
+            }
+        )
     return json.dumps(
         {
             "resourceType": "DiagnosticReport",
@@ -107,7 +129,7 @@ def report_as_fhir(payload):
             "code": {"text": "Retinal vessel mapping (research use only)"},
             "effectiveDateTime": payload["created_at"],
             "conclusion": payload["diagnosis_message"],
-            "note": [{"text": payload["safety_notice"]}],
+            "note": notes,
             "result": [{"reference": "#visible-vessel-coverage"}],
             "contained": [
                 {
@@ -116,9 +138,7 @@ def report_as_fhir(payload):
                     "status": "preliminary",
                     "code": {"text": "Visible vessel coverage"},
                     "valueQuantity": {
-                        "value": payload["research_measures"][
-                            "visible_vessel_coverage_percent"
-                        ],
+                        "value": measures["visible_vessel_coverage_percent"],
                         "unit": "%",
                     },
                 }

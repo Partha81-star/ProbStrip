@@ -1,0 +1,7 @@
+{
+  "status": "example only; not calibrated",
+  "dataset": "replace with an independent validation dataset",
+  "decision_threshold": 0.5,
+  "uncertainty_threshold": 0.02,
+  "warning": "Do not rename this file to profile.json until evaluate_dataset.py has generated a profile from representative validation data."
+}

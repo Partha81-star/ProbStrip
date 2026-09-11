@@ -30,6 +30,30 @@ def intersection_over_union(preds, targets, threshold=0.5, smooth=1e-6):
     return float((intersection + smooth) / (union + smooth))
 
 
+def sensitivity(preds, targets, threshold=0.5, smooth=1e-6):
+    if isinstance(preds, torch.Tensor):
+        preds = preds.detach().cpu().numpy()
+    if isinstance(targets, torch.Tensor):
+        targets = targets.detach().cpu().numpy()
+    predicted = np.asarray(preds) > threshold
+    actual = np.asarray(targets) > threshold
+    true_positive = np.logical_and(predicted, actual).sum()
+    false_negative = np.logical_and(np.logical_not(predicted), actual).sum()
+    return float((true_positive + smooth) / (true_positive + false_negative + smooth))
+
+
+def specificity(preds, targets, threshold=0.5, smooth=1e-6):
+    if isinstance(preds, torch.Tensor):
+        preds = preds.detach().cpu().numpy()
+    if isinstance(targets, torch.Tensor):
+        targets = targets.detach().cpu().numpy()
+    predicted = np.asarray(preds) > threshold
+    actual = np.asarray(targets) > threshold
+    true_negative = np.logical_and(np.logical_not(predicted), np.logical_not(actual)).sum()
+    false_positive = np.logical_and(predicted, np.logical_not(actual)).sum()
+    return float((true_negative + smooth) / (true_negative + false_positive + smooth))
+
+
 def expected_calibration_error(probs, targets, n_bins=10):
     if isinstance(probs, torch.Tensor):
         probs = probs.detach().cpu().numpy().flatten()

@@ -1,5 +1,7 @@
 import hashlib
+import json
 import os
+from datetime import datetime, timezone
 from pathlib import Path
 
 import cv2
@@ -16,7 +18,9 @@ from clinical.analysis import (
     resize_scan,
     review_outcome,
 )
+from clinical.biomarkers import calculate_vascular_biomarkers, reviewed_mask
 from clinical.quality import assess_image_quality
+from clinical.registration import register_followup, vessel_change_map
 from clinical.live import LiveVesselProcessor
 from clinical.reporting import (
     make_case_id,
@@ -33,6 +37,7 @@ from models.probabilistic_unet import ProbabilisticUNet
 APP_ROOT = Path(__file__).resolve().parent
 DEFAULT_CHECKPOINT = APP_ROOT / "checkpoints" / "latest_model.pth"
 DEMO_IMAGE = APP_ROOT / "test_results" / "Image_14L_input.png"
+DEFAULT_CALIBRATION = APP_ROOT / "calibration" / "profile.json"
 
 st.set_page_config(
     page_title="ProbStrip Retinal Review",
@@ -183,6 +188,33 @@ def decode_image(image_bytes: bytes):
     return cv2.cvtColor(bgr, cv2.COLOR_BGR2RGB)
 
 
+@st.cache_data(show_spinner=False)
+def file_fingerprint(path_string: str):
+    digest = hashlib.sha256()
+    with Path(path_string).open("rb") as handle:
+        for block in iter(lambda: handle.read(1024 * 1024), b""):
+            digest.update(block)
+    return digest.hexdigest()
+
+
+@st.cache_data(show_spinner=False)
+def load_calibration_profile(profile_path: str):
+    path = Path(profile_path)
+    if not path.is_file():
+        return {
+            "status": "uncalibrated research defaults",
+            "decision_threshold": 0.5,
+            "uncertainty_threshold": 0.02,
+            "dataset": "none",
+        }
+    with path.open("r", encoding="utf-8") as handle:
+        profile = json.load(handle)
+    required = {"status", "decision_threshold", "uncertainty_threshold"}
+    if not required.issubset(profile):
+        raise ValueError(f"Calibration profile is missing: {sorted(required - profile.keys())}")
+    return profile
+
+
 def run_analysis(rgb_image, settings):
     display = resize_scan(rgb_image)
     quality = assess_image_quality(display)
@@ -192,6 +224,13 @@ def run_analysis(rgb_image, settings):
         "low_confidence_area_percent": 100.0,
         "mean_model_variance": 0.0,
         "maximum_model_variance": 0.0,
+        "fractal_dimension": 0.0,
+        "skeleton_length_pixels": 0,
+        "estimated_mean_width_pixels": 0.0,
+        "endpoint_region_count": 0,
+        "branch_region_count": 0,
+        "vessel_component_count": 0,
+        "skeleton_density_percent": 0.0,
     }
 
     if quality.status == "Retake recommended":
@@ -258,6 +297,14 @@ def quality_table(quality):
     return pd.DataFrame(rows)
 
 
+def effective_mask(case):
+    return case.get("reviewed_binary", case.get("binary"))
+
+
+def effective_measures(case):
+    return case.get("reviewed_measures", case["measures"])
+
+
 def create_and_store_case(image_bytes, settings, language):
     rgb = decode_image(image_bytes)
     image_hash = hashlib.sha256(image_bytes).hexdigest()[:12]
@@ -281,6 +328,9 @@ def create_and_store_case(image_bytes, settings, language):
             "decision_threshold": settings["decision_threshold"],
             "uncertainty_threshold": settings["uncertainty_threshold"],
             "image_fingerprint": image_hash,
+            "calibration_status": settings["calibration_status"],
+            "calibration_dataset": settings["calibration_dataset"],
+            "checkpoint_sha256": settings["checkpoint_sha256"],
         },
         language=language,
     )
@@ -293,6 +343,10 @@ def create_and_store_case(image_bytes, settings, language):
 def render_patient_result(case, language):
     text = PATIENT_TEXT[language]
     outcome = case["outcome"]
+    display_measures = effective_measures(case)
+    clinician_reviewed = (
+        case["payload"].get("clinician_review", {}).get("status") == "reviewed"
+    )
     translated_title = text.get(outcome["level"], outcome["title"])
     translated_body = text[f'{outcome["level"]}_body']
     translated_next = text[f'{outcome["level"]}_next']
@@ -301,6 +355,12 @@ def render_patient_result(case, language):
         f'{text["no_diagnosis_body"]}</div>',
         unsafe_allow_html=True,
     )
+    if clinician_reviewed:
+        st.success(
+            "A qualified clinician marked this report as reviewed. The displayed map "
+            "and measurements include the saved correction; the original AI output "
+            "remains in the technical record."
+        )
     st.markdown(
         f'<div class="result-{outcome["level"]}"><strong>{translated_title}</strong>'
         f'<br>{translated_body}<br><br><strong>{text["next"]}:</strong> '
@@ -317,12 +377,12 @@ def render_patient_result(case, language):
     else:
         m2.metric(
             "Visible vessel coverage",
-            f"{case['measures']['visible_vessel_coverage_percent']:.1f}%",
+            f"{display_measures['visible_vessel_coverage_percent']:.1f}%",
             help="The share of the visible retinal field marked as vessel by the model. This is not a disease score.",
         )
         m3.metric(
             "Area needing review",
-            f"{case['measures']['low_confidence_area_percent']:.1f}%",
+            f"{display_measures['low_confidence_area_percent']:.1f}%",
             help="The share of the image where repeated model passes disagreed.",
         )
 
@@ -351,7 +411,7 @@ def render_patient_result(case, language):
                 case["display"], caption="Original retinal image", width="stretch"
             )
             right.image(
-                case["overlay"],
+                case.get("reviewed_overlay", case["overlay"]),
                 caption="Teal: mapped vessels. Amber: areas needing review.",
                 width="stretch",
             )
@@ -531,8 +591,8 @@ def camera_page(settings, language):
 def compare_page():
     st.header("Compare visits", anchor=False)
     st.write(
-        "Compare research measurements from two images analyzed in this session. A change "
-        "can come from image quality or camera position and is not a diagnosis."
+        "Align and compare two vessel maps from this session. Measurements are shown "
+        "only as research morphology and are not a diagnosis."
     )
     mapped = [case for case in st.session_state.cases if case["prediction"] is not None]
     if len(mapped) < 2:
@@ -548,15 +608,32 @@ def compare_page():
         st.warning("Choose two different reports.")
         return
 
+    first_mask = effective_mask(first)
+    second_mask = effective_mask(second)
+    with st.spinner("Aligning the later image to the earlier visit..."):
+        registration = register_followup(
+            first["display"], second["display"], second_mask
+        )
+
+    if registration.success:
+        st.success(
+            f"Registration passed ({registration.method}, score {registration.score:.3f})."
+        )
+    else:
+        st.warning(registration.message)
+
     rows = []
     fields = [
         ("Visible vessel coverage", "visible_vessel_coverage_percent", "%"),
         ("Central vessel coverage", "central_vessel_coverage_percent", "%"),
         ("Area needing review", "low_confidence_area_percent", "%"),
+        ("Fractal dimension", "fractal_dimension", ""),
+        ("Estimated mean width", "estimated_mean_width_pixels", " px"),
+        ("Branch regions", "branch_region_count", ""),
     ]
     for label, key, unit in fields:
-        earlier = first["measures"][key]
-        later = second["measures"][key]
+        earlier = effective_measures(first)[key]
+        later = effective_measures(second)[key]
         rows.append(
             {
                 "Research measurement": label,
@@ -568,10 +645,36 @@ def compare_page():
     st.dataframe(pd.DataFrame(rows), hide_index=True, width="stretch")
     before, after = st.columns(2)
     before.image(first["overlay"], caption=f"Earlier: {first_label}", width="stretch")
-    after.image(second["overlay"], caption=f"Later: {second_label}", width="stretch")
-    st.warning(
-        "These images are not geometrically registered. A clinician must confirm that "
-        "camera angle, field of view, and image quality are comparable."
+    after.image(
+        registration.aligned_image if registration.success else second["display"],
+        caption=(
+            f"Later image aligned: {second_label}"
+            if registration.success
+            else f"Later image, not aligned: {second_label}"
+        ),
+        width="stretch",
+    )
+
+    if registration.success and registration.aligned_mask is not None:
+        change = vessel_change_map(first_mask, registration.aligned_mask)
+        st.metric(
+            "Changed vessel-map pixels",
+            f"{change['changed_vessel_percent']:.1f}%",
+            help=(
+                "Pixel disagreement after automated alignment. Capture differences and "
+                "model errors can cause change; this is not biological progression."
+            ),
+        )
+        st.image(
+            change["visualization"],
+            caption=(
+                "Teal: present in both maps. Blue: only later map. Red: only earlier map."
+            ),
+            width="stretch",
+        )
+    st.caption(
+        "A clinician must confirm comparable field of view, image quality, and alignment "
+        "before interpreting any difference."
     )
 
 
@@ -587,7 +690,12 @@ def clinician_page():
     selected = st.selectbox("Report reference", labels, index=len(labels) - 1)
     case = st.session_state.cases[labels.index(selected)]
     st.dataframe(quality_table(case["quality"]), hide_index=True, width="stretch")
-    st.json(case["payload"]["research_measures"], expanded=True)
+    st.markdown("**Original AI measurements**")
+    st.json(case["payload"]["research_measures"], expanded=False)
+
+    note_key = f"note-{selected}"
+    sign_key = f"sign-{selected}"
+    candidate_mask = None
     if case["prediction"] is not None:
         p1, p2, p3 = st.columns(3)
         p1.image(case["display"], caption="Input", width="stretch")
@@ -598,20 +706,136 @@ def clinician_page():
         )
         p3.image(case["heat"], caption="MC-dropout variance", width="stretch")
 
-    note_key = f"note-{selected}"
-    sign_key = f"sign-{selected}"
+        st.subheader("Review and correct the vessel map", anchor=False)
+        correction_source = st.radio(
+            "Correction method",
+            ["Refine model threshold", "Upload corrected binary mask"],
+            horizontal=True,
+            key=f"correction-source-{selected}",
+        )
+        if correction_source == "Refine model threshold":
+            controls_a, controls_b = st.columns(2)
+            threshold = controls_a.slider(
+                "Reviewed vessel threshold",
+                0.20,
+                0.90,
+                float(case["payload"]["model_settings"]["decision_threshold"]),
+                0.01,
+                key=f"review-threshold-{selected}",
+            )
+            minimum_area = controls_b.slider(
+                "Remove regions smaller than",
+                1,
+                100,
+                4,
+                1,
+                key=f"review-area-{selected}",
+                help="Pixel area at the 256 x 256 analysis resolution.",
+            )
+            candidate_mask = reviewed_mask(
+                case["prediction"], threshold, minimum_area
+            )
+            correction_details = {
+                "method": "threshold refinement",
+                "threshold": threshold,
+                "minimum_component_area": minimum_area,
+            }
+        else:
+            corrected_upload = st.file_uploader(
+                "Corrected mask",
+                type=["png", "jpg", "jpeg", "tif", "tiff"],
+                key=f"corrected-mask-{selected}",
+                help="Upload a black-background mask with reviewed vessels in white.",
+            )
+            if corrected_upload is not None:
+                corrected_rgb = decode_image(corrected_upload.getvalue())
+                corrected_gray = cv2.cvtColor(corrected_rgb, cv2.COLOR_RGB2GRAY)
+                candidate_mask = cv2.resize(
+                    corrected_gray,
+                    (case["display"].shape[1], case["display"].shape[0]),
+                    interpolation=cv2.INTER_NEAREST,
+                ) >= 128
+                correction_details = {"method": "uploaded clinician mask"}
+            else:
+                correction_details = {"method": "uploaded clinician mask"}
+                st.info("Upload a corrected mask to preview and approve it.")
+
+        if candidate_mask is not None:
+            candidate_measures = calculate_research_measures(
+                case["display"],
+                candidate_mask,
+                case["uncertain"],
+                case["variance"],
+            )
+            _, _, candidate_overlay, _ = build_visuals(
+                case["display"],
+                candidate_mask.astype(np.float32),
+                case["variance"],
+                0.5,
+                float(case["payload"]["model_settings"]["uncertainty_threshold"]),
+            )
+            original_col, candidate_col = st.columns(2)
+            original_col.image(
+                case.get("reviewed_overlay", case["overlay"]),
+                caption="Current saved map",
+                width="stretch",
+            )
+            candidate_col.image(
+                candidate_overlay,
+                caption="Candidate reviewed map",
+                width="stretch",
+            )
+            st.dataframe(
+                pd.DataFrame(
+                    [
+                        {
+                            "Research measurement": key.replace("_", " ").title(),
+                            "Original AI": case["measures"].get(key),
+                            "Candidate review": candidate_measures.get(key),
+                        }
+                        for key in (
+                            "visible_vessel_coverage_percent",
+                            "fractal_dimension",
+                            "estimated_mean_width_pixels",
+                            "branch_region_count",
+                            "vessel_component_count",
+                        )
+                    ]
+                ),
+                hide_index=True,
+                width="stretch",
+            )
+
     st.text_area(
         "Clinician note",
         key=note_key,
         placeholder="Document image limitations, corrections, or follow-up here.",
     )
     st.checkbox("Reviewed by a qualified clinician", key=sign_key)
-    if st.session_state.get(sign_key):
+    save_review = st.button(
+        "Save clinician review",
+        type="primary",
+        width="stretch",
+        disabled=(case["prediction"] is not None and candidate_mask is None),
+    )
+    if save_review and not st.session_state.get(sign_key):
+        st.warning("Confirm qualified-clinician review before saving.")
+    elif save_review:
+        if candidate_mask is not None:
+            case["reviewed_binary"] = candidate_mask
+            case["reviewed_overlay"] = candidate_overlay
+            case["reviewed_measures"] = candidate_measures
         case["payload"]["clinician_review"] = {
             "status": "reviewed",
             "note": st.session_state.get(note_key, ""),
+            "reviewed_at": datetime.now(timezone.utc).isoformat(),
+            "correction": correction_details if candidate_mask is not None else None,
+            "reviewed_research_measures": (
+                candidate_measures if candidate_mask is not None else None
+            ),
         }
         st.success("Review status is stored for this session and included in new downloads.")
+
     d1, d2 = st.columns(2)
     d1.download_button(
         "Download technical JSON",
@@ -630,6 +854,13 @@ def clinician_page():
     st.caption(
         "The FHIR-shaped export is an interoperability prototype and requires local profiling and validation before EHR use."
     )
+    if st.button("Delete selected session report", width="stretch"):
+        index = labels.index(selected)
+        st.session_state.cases.pop(index)
+        st.session_state.active_case = (
+            len(st.session_state.cases) - 1 if st.session_state.cases else None
+        )
+        st.rerun()
 
 
 def safety_page():
@@ -651,6 +882,10 @@ def safety_page():
         "Reports stay in the current Streamlit session. Do not upload identifying clinical "
         "images to a public demonstration deployment."
     )
+    st.write(
+        "Use the sidebar control to clear every image and report reference held by the "
+        "current browser session. Closing or expiring the session also releases them."
+    )
     st.subheader("For researchers", anchor=False)
     st.write(
         "Clinical use requires representative multi-site evaluation, subgroup analysis, "
@@ -667,6 +902,23 @@ def main():
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     checkpoint = os.getenv("PROBSTRIP_CHECKPOINT", str(DEFAULT_CHECKPOINT))
+    calibration_path = os.getenv(
+        "PROBSTRIP_CALIBRATION", str(DEFAULT_CALIBRATION)
+    )
+    try:
+        calibration = load_calibration_profile(calibration_path)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        st.error(f"Calibration profile error: {exc}")
+        calibration = {
+            "status": "invalid profile; research defaults active",
+            "decision_threshold": 0.5,
+            "uncertainty_threshold": 0.02,
+            "dataset": "none",
+        }
+    try:
+        checkpoint_sha256 = file_fingerprint(checkpoint)
+    except OSError:
+        checkpoint_sha256 = "unavailable"
 
     with st.sidebar:
         st.markdown('<div class="brand">ProbStrip</div>', unsafe_allow_html=True)
@@ -689,12 +941,32 @@ def main():
         with st.expander("Advanced model settings"):
             mc_samples = st.slider("Repeated model passes", 5, 20, 10, 5)
             decision_threshold = st.slider(
-                "Vessel decision threshold", 0.30, 0.70, 0.50, 0.05
+                "Vessel decision threshold",
+                0.20,
+                0.90,
+                float(np.clip(calibration["decision_threshold"], 0.20, 0.90)),
+                0.01,
             )
             uncertainty_threshold = st.slider(
-                "Uncertainty flag threshold", 0.005, 0.050, 0.020, 0.005
+                "Uncertainty flag threshold",
+                0.0001,
+                0.1000,
+                float(np.clip(calibration["uncertainty_threshold"], 0.0001, 0.1)),
+                0.0001,
+                format="%.4f",
+            )
+            st.caption(
+                f"Calibration: {calibration['status']} | Dataset: "
+                f"{calibration.get('dataset', 'unspecified')}"
             )
         st.caption(f"Compute: {device.upper()} | Session reports: {len(st.session_state.cases)}")
+        st.caption(f"Model: {checkpoint_sha256[:12]}")
+        if st.session_state.cases and st.button(
+            "Clear all session reports", width="stretch"
+        ):
+            st.session_state.cases = []
+            st.session_state.active_case = None
+            st.rerun()
 
     settings = {
         "device": device,
@@ -702,6 +974,9 @@ def main():
         "mc_samples": mc_samples,
         "decision_threshold": decision_threshold,
         "uncertainty_threshold": uncertainty_threshold,
+        "calibration_status": calibration["status"],
+        "calibration_dataset": calibration.get("dataset", "unspecified"),
+        "checkpoint_sha256": checkpoint_sha256,
     }
 
     if page == "Review image":

@@ -1,4 +1,6 @@
 import os
+from datetime import datetime, timezone
+
 import torch
 import torch.optim as optim
 from training.losses import BCEDiceLoss
@@ -19,12 +21,14 @@ class ProbStripTrainer:
         weight_decay=1e-4,
         device="cpu",
         checkpoint_dir="checkpoints",
+        metadata=None,
     ):
         self.model = model.to(device)
         self.train_loader = train_loader
         self.val_loader = val_loader
         self.device = device
         self.checkpoint_dir = checkpoint_dir
+        self.metadata = metadata or {}
 
         os.makedirs(self.checkpoint_dir, exist_ok=True)
 
@@ -126,6 +130,8 @@ class ProbStripTrainer:
             {
                 "model_state_dict": self.model.state_dict(),
                 "optimizer_state_dict": self.optimizer.state_dict(),
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+                "metadata": self.metadata,
             },
             path,
         )

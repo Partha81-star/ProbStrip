@@ -44,3 +44,19 @@ def test_fhir_export_is_preliminary_and_research_labeled():
     assert fhir["status"] == "preliminary"
     assert "Research" in fhir["category"][0]["text"]
 
+
+def test_reviewed_measure_is_used_in_clinician_exports():
+    payload = _payload()
+    reviewed = dict(payload["research_measures"])
+    reviewed["visible_vessel_coverage_percent"] = 7.25
+    payload["clinician_review"] = {
+        "status": "reviewed",
+        "note": "Reviewed against source image.",
+        "reviewed_research_measures": reviewed,
+    }
+
+    fhir = json.loads(report_as_fhir(payload))
+    html = report_as_html(payload)
+
+    assert fhir["contained"][0]["valueQuantity"]["value"] == 7.25
+    assert "Clinician review" in html

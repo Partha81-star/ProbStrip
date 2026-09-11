@@ -19,6 +19,8 @@ medical diagnosis.
    FHIR-shaped JSON.
 7. Compare research measurements from two usable images in the current session.
 8. Capture a still image on a phone or preview a live vessel overlay with WebRTC.
+9. Refine or replace a vessel mask in the clinician review workspace.
+10. Register two visits before showing a guarded vessel-map change view.
 
 ## Safety and intended use
 
@@ -68,6 +70,24 @@ python -m pip install -r requirements-dev.txt
 pytest -q
 ```
 
+## Train and evaluate
+
+Datasets use a simple `Images/` and `Masks/` directory layout. Common CHASE_DB1
+mask names such as `Image_01L_1stHO.png` are discovered automatically. Training
+uses inferred subject groups so paired eyes are not split across training and
+validation.
+
+```powershell
+python run_dataset.py C:\path\to\dataset --epochs 20
+python evaluate_dataset.py C:\path\to\independent-validation-data --output-dir evaluation_results
+```
+
+Evaluation writes per-image Dice, IoU, sensitivity, specificity, calibration,
+uncertainty, and topology-error measurements. It also writes a dataset-specific
+`calibration_profile.json`. Review that artifact before copying it to
+`calibration/profile.json`; the app will then disclose and use those thresholds.
+This does not make the model clinically calibrated.
+
 ## Free deployment on Streamlit Community Cloud
 
 1. Sign in at <https://share.streamlit.io> using the GitHub account that owns
@@ -88,16 +108,25 @@ clinical/quality.py            Acquisition-quality gate
 clinical/analysis.py           Visuals, research measurements, review outcome
 clinical/reporting.py          HTML, JSON, and preliminary FHIR exports
 clinical/live.py               Throttled real-time WebRTC frame processor
+clinical/biomarkers.py         Vessel morphology and mask refinement
+clinical/registration.py       Guarded affine visit registration and change maps
+clinical/calibration.py        Validation-derived threshold analysis
 models/                        Probabilistic StripConv U-Net
 inference/                     Monte Carlo dropout inference
 training/                      Offline training utilities
+evaluate_dataset.py            External evaluation and calibration profile CLI
 tests/                         Safety and report behavior tests
 ```
 
+See [MODEL_CARD.md](MODEL_CARD.md) for intended use, provenance gaps, known
+limitations, and the evidence required before a prospective study.
+
 ## Next validation milestones
 
-- Patient-level splits and external evaluation on multiple devices and sites.
-- FIVES and other adult/pathology-inclusive retinal datasets.
-- Calibration and selective-risk validation for every abstention threshold.
-- Clinician correction tools and geometrically registered longitudinal images.
-- Subgroup, privacy, security, usability, and prospective clinical studies.
+- Acquire approved FIVES and other adult/pathology-inclusive datasets; data is
+  not redistributed by this repository.
+- Run and publish independent multi-device and multi-site evaluation.
+- Add artery/vein and lesion models only after obtaining suitable labels and
+  defining a clinician-approved intended use.
+- Complete subgroup, privacy, security, accessibility, and usability studies.
+- Conduct prospective clinical studies and applicable regulatory review.
