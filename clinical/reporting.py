@@ -97,3 +97,49 @@ def report_as_html(payload):
         f"{review_block}<h2>Vascular measurements</h2><table><tr><th>Measure</th><th>Value</th>"
         f"</tr>{rows}</table></body></html>"
     )
+
+
+def report_as_fhir(payload):
+    review = payload.get("clinician_review") or {}
+    measures = review.get("reviewed_research_measures") or payload.get("research_measures", {})
+    notes = [{"text": payload.get("safety_notice", "")}]
+    if review.get("status") == "reviewed":
+        notes.append(
+            {
+                "text": "Clinician session review: "
+                + (review.get("note") or "No note provided.")
+            }
+        )
+    diag = payload.get("diagnosis") or {}
+    if diag:
+        notes.append(
+            {
+                "text": f"Diagnostic evaluation: {diag.get('primary_condition', '')} - {diag.get('risk_level', '')} Risk ({diag.get('risk_score', 0)}%)"
+            }
+        )
+    return json.dumps(
+        {
+            "resourceType": "DiagnosticReport",
+            "id": payload.get("case_id", "").lower(),
+            "status": "preliminary",
+            "category": [{"text": "Clinical decision support retinal image analysis"}],
+            "code": {"text": "Retinal vessel mapping and diagnostic risk assessment"},
+            "effectiveDateTime": payload.get("created_at", ""),
+            "conclusion": review.get("impression") or payload.get("diagnosis_message", ""),
+            "note": notes,
+            "result": [{"reference": "#visible-vessel-coverage"}],
+            "contained": [
+                {
+                    "resourceType": "Observation",
+                    "id": "visible-vessel-coverage",
+                    "status": "preliminary",
+                    "code": {"text": "Visible vessel coverage"},
+                    "valueQuantity": {
+                        "value": measures.get("visible_vessel_coverage_percent", 0.0),
+                        "unit": "%",
+                    },
+                }
+            ],
+        },
+        indent=2,
+    )
