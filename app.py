@@ -383,11 +383,6 @@ def render_patient_result(case, language):
             "This result was created with an older image-quality policy. Analyze the "
             "image again to apply the current scoring rules."
         )
-    st.markdown(
-        f'<div class="safety-bar"><strong>{text["no_diagnosis"]}</strong><br>'
-        f'{text["no_diagnosis_body"]}</div>',
-        unsafe_allow_html=True,
-    )
     if clinician_reviewed:
         st.success(
             "A qualified clinician marked this report as reviewed. The displayed map "
