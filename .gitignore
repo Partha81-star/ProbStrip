@@ -31,4 +31,6 @@ wheels/
 htmlcov/
 evaluation_results/
 /output/pdf/
+/datasets/
+/training_runs/
 .streamlit/secrets.toml

@@ -134,6 +134,8 @@ tests/                         Safety and report behavior tests
 
 See [MODEL_CARD.md](MODEL_CARD.md) for intended use, provenance gaps, known
 limitations, and the evidence required before a prospective study.
+See [DATASETS.md](DATASETS.md) for modality-specific tasks, official dataset
+sources, access requirements, and release gates.
 
 ## Next validation milestones
 

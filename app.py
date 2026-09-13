@@ -24,6 +24,7 @@ from clinical.general_reporting import (
     make_general_report_payload,
 )
 from clinical.modalities import MODALITIES, analyze_general_image
+from clinical.model_registry import model_task_status
 from clinical.pdf_reporting import general_report_as_pdf, retinal_report_as_pdf
 from clinical.quality import QUALITY_POLICY_VERSION, assess_image_quality
 from clinical.registration import register_followup, vessel_change_map
@@ -534,12 +535,11 @@ def analyze_page(settings, language):
         return
 
     st.write(
-        "Upload an image to assess its capture quality, map anatomical structures, "
-        "and calculate clinical biomarkers."
+        "Upload an image to assess capture quality, map retinal vessels, and calculate research measurements."
     )
     st.markdown(
-        '<div class="safety-bar"><strong>Clinical decision support.</strong> This system provides '
-        "automated structure segmentation, biomarker calculations, and disease risk assessment.</div>",
+        '<div class="safety-bar"><strong>Research review.</strong> This system provides '
+        "retinal vessel segmentation and uncertainty visualization, not diagnosis or treatment advice.</div>",
         unsafe_allow_html=True,
     )
 
@@ -564,7 +564,7 @@ def analyze_page(settings, language):
         else:
             try:
                 image_bytes = uploaded.getvalue()
-                with st.spinner("Checking image quality and evaluating diagnostic biomarkers..."):
+                with st.spinner("Checking image quality and calculating research vessel measurements..."):
                     case = create_and_store_case(image_bytes, settings, language)
                 st.success(f"Report created successfully: {case['case_id']}")
             except (FileNotFoundError, RuntimeError, ValueError) as exc:
@@ -683,6 +683,15 @@ def general_imaging_page(modality):
     )
 
     modality_info = MODALITIES[modality]
+    task_status = model_task_status(modality, APP_ROOT)
+    if task_status["available"]:
+        st.info(
+            f"Research model available: {task_status['task']}. It is not clinically validated and is not used to prescribe treatment."
+        )
+    else:
+        st.info(
+            f"Model status: {task_status['clinical_readiness']}. Planned dataset: {task_status['dataset']}. This page currently provides technical image review only."
+        )
     st.caption(modality_info["guidance"])
     source = st.segmented_control(
         "Image source",
