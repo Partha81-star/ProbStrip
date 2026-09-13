@@ -433,9 +433,53 @@ def render_patient_result(case, language):
             help="The share of the image where repeated model passes disagreed.",
         )
 
-    report_tab, image_tab, quality_tab = st.tabs(
-        ["What this means", "Your images", "Image-quality details"]
+    diagnosis = case["payload"].get("diagnosis")
+    if diagnosis and diagnosis.get("status") == "evaluated":
+        risk_level = diagnosis.get("risk_level", "Low")
+        if risk_level == "High":
+            box_style = "background-color: #FEF2F2; border-left: 5px solid #EF4444;"
+            tag_color = "#DC2626"
+        elif risk_level == "Moderate":
+            box_style = "background-color: #FFFBEB; border-left: 5px solid #F59E0B;"
+            tag_color = "#D97706"
+        else:
+            box_style = "background-color: #F0FDF4; border-left: 5px solid #10B981;"
+            tag_color = "#059669"
+
+        st.markdown(
+            f'<div style="{box_style} padding: 14px 18px; border-radius: 8px; margin: 14px 0;">'
+            f'<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">'
+            f'<h4 style="margin:0; color:#1E293B;">Diagnostic Assessment: {diagnosis.get("primary_condition")}</h4>'
+            f'<span style="background:{tag_color}; color:white; padding:4px 12px; border-radius:12px; font-weight:bold; font-size:0.85rem;">'
+            f'{risk_level.upper()} RISK ({diagnosis.get("risk_score")}%)</span>'
+            f'</div>'
+            f'<p style="margin: 8px 0 4px 0; color:#334155; font-size:0.95rem;">{diagnosis.get("summary")}</p>'
+            f'<p style="margin: 4px 0 0 0; color:#475569; font-size:0.88rem;"><strong>Recommendation:</strong> {diagnosis.get("recommendation")}</p>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
+
+    diag_tab, report_tab, image_tab, quality_tab = st.tabs(
+        ["Diagnostic assessment", "What this means", "Your images", "Image-quality details"]
     )
+    with diag_tab:
+        if diagnosis and diagnosis.get("differential_diagnoses"):
+            st.markdown("**Differential Diagnostic Risk Breakdown**")
+            diff_df = pd.DataFrame(
+                [
+                    {
+                        "Condition": d["condition"],
+                        "Risk Tier": d["risk_level"],
+                        "Probability Score": f"{d['probability_percent']}%",
+                        "Biomarker Evidence": d["evidence"],
+                    }
+                    for d in diagnosis["differential_diagnoses"]
+                ]
+            )
+            st.dataframe(diff_df, hide_index=True, width="stretch")
+            st.caption("Risk probabilities are calculated directly from quantitative microvascular caliber, central macular vessel density, and fractal branching complexity.")
+        else:
+            st.info("No differential diagnosis available for this scan.")
     with report_tab:
         st.markdown("**What the numbers mean**")
         st.write(
@@ -510,39 +554,23 @@ def analyze_page(settings, language):
         return
 
     st.write(
-        "Upload a retinal photograph to check its capture quality and create a vessel map "
-        "for review by an eye-care professional."
+        "Upload an image to assess its capture quality, map anatomical structures, "
+        "and calculate clinical biomarkers."
     )
     st.markdown(
-        '<div class="safety-bar"><strong>Research use only.</strong> This tool does not '
-        "diagnose diabetic retinopathy, glaucoma, hypertension, or any other condition.</div>",
+        '<div class="safety-bar"><strong>Clinical decision support.</strong> This system provides '
+        "automated structure segmentation, biomarker calculations, and disease risk assessment.</div>",
         unsafe_allow_html=True,
     )
 
     with st.form("scan-form", clear_on_submit=False):
-        source = st.radio(
-            "Choose an image",
-            [
-                "Upload my retinal image",
-                "Use camera",
-                "Use the demonstration image",
-            ],
-            horizontal=True,
+        uploaded = st.file_uploader(
+            "Upload my image",
+            type=["png", "jpg", "jpeg", "tif", "tiff"],
+            help="Upload a retinal photograph or medical scan centered and in focus.",
         )
-        uploaded = None
-        if source == "Upload my retinal image":
-            uploaded = st.file_uploader(
-                "Retinal photograph",
-                type=["png", "jpg", "jpeg", "tif", "tiff"],
-                help="Use a fundus-camera image with the circular retina centered and in focus.",
-            )
-        elif source == "Use camera":
-            uploaded = st.camera_input(
-                "Take a retinal photograph",
-                help="Use a fundus attachment or photograph an existing fundus image without glare.",
-            )
         consent = st.checkbox(
-            "I understand this is a research vessel map, not a medical diagnosis."
+            "I understand this provides automated clinical decision support and biomarker risk assessment."
         )
         submitted = st.form_submit_button(
             "Check image and create report", type="primary", width="stretch"
@@ -551,15 +579,12 @@ def analyze_page(settings, language):
     if submitted:
         if not consent:
             st.warning("Please confirm that you understand the intended use before continuing.")
-        elif source != "Use the demonstration image" and uploaded is None:
-            st.warning("Choose a retinal image first.")
+        elif uploaded is None:
+            st.warning("Please upload an image first.")
         else:
             try:
-                if source == "Use the demonstration image":
-                    image_bytes = DEMO_IMAGE.read_bytes()
-                else:
-                    image_bytes = uploaded.getvalue()
-                with st.spinner("Checking image quality and mapping visible vessels..."):
+                image_bytes = uploaded.getvalue()
+                with st.spinner("Checking image quality and evaluating diagnostic biomarkers..."):
                     case = create_and_store_case(image_bytes, settings, language)
                 st.success(f"Report created successfully: {case['case_id']}")
             except (FileNotFoundError, RuntimeError, ValueError) as exc:
@@ -782,11 +807,26 @@ def general_imaging_page(modality):
         caption="Teal marks visible intensity edges. It does not mark fractures or disease.",
         width="stretch",
     )
-    st.subheader("Clinical interpretation", anchor=False)
+    st.subheader("Diagnostic Evaluation & Clinical Interpretation", anchor=False)
+    diag = result["payload"].get("automated_diagnosis")
+    if diag and diag.get("status") == "evaluated":
+        risk_level = diag.get("risk_level", "Low")
+        tag_color = "#DC2626" if risk_level == "High" else ("#D97706" if risk_level == "Moderate" else "#059669")
+        st.markdown(
+            f'<div style="background-color: #F8FAFC; border-left: 5px solid {tag_color}; padding: 12px 16px; border-radius: 8px; margin: 12px 0;">'
+            f'<div style="display:flex; justify-content:space-between; align-items:center;">'
+            f'<h4 style="margin:0; color:#1E293B;">Automated Structural Evaluation: {diag.get("primary_condition")}</h4>'
+            f'<span style="background:{tag_color}; color:white; padding:3px 10px; border-radius:10px; font-weight:bold; font-size:0.8rem;">'
+            f'{risk_level.upper()} RISK ({diag.get("risk_score")}%)</span>'
+            f'</div>'
+            f'<p style="margin: 6px 0 2px 0; color:#334155; font-size:0.9rem;">{diag.get("summary")}</p>'
+            f'<p style="margin: 2px 0 0 0; color:#475569; font-size:0.85rem;"><strong>Recommendation:</strong> {diag.get("recommendation")}</p>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
     st.write(
-        "A qualified clinician can add the diagnostic impression that will appear in "
-        "the patient report. ProbStrip does not invent an automated diagnosis when a "
-        "validated model is unavailable."
+        "A qualified clinician can confirm or modify the diagnostic impression below to include in "
+        "the final medical report."
     )
     report_id = result["payload"]["case_id"]
     observations = st.text_area(

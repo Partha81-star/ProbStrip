@@ -89,7 +89,7 @@ def _page_footer(canvas, document):
     canvas.line(18 * mm, 14 * mm, 192 * mm, 14 * mm)
     canvas.setFont("Helvetica", 7.5)
     canvas.setFillColor(MUTED)
-    canvas.drawString(18 * mm, 9 * mm, "ProbStrip research image review")
+    canvas.drawString(18 * mm, 9 * mm, "ProbStrip clinical decision support report")
     canvas.drawRightString(192 * mm, 9 * mm, f"Page {document.page}")
     canvas.restoreState()
 
@@ -118,7 +118,7 @@ def _document(story):
         rightMargin=18 * mm,
         topMargin=16 * mm,
         bottomMargin=20 * mm,
-        title="ProbStrip patient report",
+        title="ProbStrip clinical report",
         author="ProbStrip",
     )
     document.build(story, onFirstPage=_page_footer, onLaterPages=_page_footer)
@@ -140,6 +140,82 @@ def _notice(text, styles):
         )
     )
     return table
+
+
+def _diagnosis_section(payload, styles):
+    diag = payload.get("diagnosis") or payload.get("automated_diagnosis") or {}
+    if not diag or diag.get("status") != "evaluated":
+        return []
+
+    risk_level = diag.get("risk_level", "Low")
+    if risk_level == "High":
+        badge_bg = colors.HexColor("#FEE2E2")
+        badge_border = colors.HexColor("#EF4444")
+    elif risk_level == "Moderate":
+        badge_bg = PALE_AMBER
+        badge_border = colors.HexColor("#D97706")
+    else:
+        badge_bg = PALE_TEAL
+        badge_border = TEAL
+
+    summary_text = (
+        f"<b>Primary Diagnostic Pattern:</b> {_safe(diag.get('primary_condition', ''))} "
+        f"(Risk Tier: <b>{_safe(risk_level)}</b> — Score: {diag.get('risk_score', 0)}%)<br/>"
+        f"{_safe(diag.get('summary', ''))}<br/>"
+        f"<b>Clinical Recommendation:</b> {_safe(diag.get('recommendation', ''))}"
+    )
+
+    card = Table([[Paragraph(summary_text, styles["BodySmall"])]], colWidths=[170 * mm])
+    card.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), badge_bg),
+                ("BOX", (0, 0), (-1, -1), 0.7, badge_border),
+                ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("TOPPADDING", (0, 0), (-1, -1), 8),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 8),
+            ]
+        )
+    )
+
+    differentials = diag.get("differential_diagnoses") or []
+    items = [
+        Paragraph("Diagnostic Assessment & Disease Staging", styles["Section"]),
+        card,
+        Spacer(1, 3 * mm),
+    ]
+
+    if differentials:
+        diff_rows = [["Evaluated Condition", "Risk Tier", "Probability", "Clinical Biomarker Evidence"]]
+        for d in differentials:
+            diff_rows.append(
+                [
+                    Paragraph(_safe(d.get("condition")), styles["BodySmall"]),
+                    Paragraph(_safe(d.get("risk_level")), styles["BodySmall"]),
+                    Paragraph(f"{d.get('probability_percent', 0)}%", styles["BodySmall"]),
+                    Paragraph(_safe(d.get("evidence")), styles["BodySmall"]),
+                ]
+            )
+        diff_table = Table(diff_rows, colWidths=[48 * mm, 22 * mm, 22 * mm, 78 * mm], repeatRows=1)
+        diff_table.setStyle(
+            TableStyle(
+                [
+                    ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#1E293B")),
+                    ("TEXTCOLOR", (0, 0), (-1, 0), colors.white),
+                    ("FONTNAME", (0, 0), (-1, 0), "Helvetica-Bold"),
+                    ("FONTSIZE", (0, 0), (-1, 0), 8),
+                    ("GRID", (0, 0), (-1, -1), 0.3, LINE),
+                    ("VALIGN", (0, 0), (-1, -1), "MIDDLE"),
+                    ("ROWBACKGROUNDS", (0, 1), (-1, -1), [colors.white, colors.HexColor("#F8FAFC")]),
+                    ("TOPPADDING", (0, 0), (-1, -1), 5),
+                    ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
+                ]
+            )
+        )
+        items.extend([diff_table, Spacer(1, 3 * mm)])
+
+    return items
 
 
 def _quality_table(checks, styles, general=False):
@@ -178,7 +254,7 @@ def _clinician_section(payload, styles):
         return [
             Paragraph("Clinical interpretation", styles["Section"]),
             Paragraph(
-                "Awaiting review by a qualified healthcare professional. No automated diagnosis was generated.",
+                "Awaiting confirmation by a qualified healthcare professional. Pre-populated automated findings must be validated against patient symptoms.",
                 styles["BodySmall"],
             ),
         ]
@@ -217,7 +293,7 @@ def retinal_report_as_pdf(payload, original_image=None, result_image=None):
         Paragraph(f"<b>{_safe(outcome_text)}</b>", styles["BodySmall"]),
         Spacer(1, 2 * mm),
         Paragraph(
-            "The values below describe the software output. They do not show whether the eye is healthy or unhealthy.",
+            "The values below describe the extracted quantitative biomarkers and software output.",
             styles["BodySmall"],
         ),
     ]
@@ -247,7 +323,8 @@ def retinal_report_as_pdf(payload, original_image=None, result_image=None):
             ]
         )
     )
-    story.extend([Spacer(1, 4 * mm), metrics])
+    story.extend([Spacer(1, 4 * mm), metrics, Spacer(1, 3 * mm)])
+    story.extend(_diagnosis_section(payload, styles))
     story.extend(_clinician_section(payload, styles))
 
     original = _image(original_image) if original_image is not None else None
@@ -310,6 +387,8 @@ def general_report_as_pdf(payload, original_image=None, result_image=None):
     ]
     for item in payload["technical_observations"]:
         story.append(Paragraph(f"- {_safe(item)}", styles["BodySmall"]))
+
+    story.extend(_diagnosis_section(payload, styles))
     story.extend(_clinician_section(payload, styles))
 
     original = _image(original_image) if original_image is not None else None
@@ -329,7 +408,7 @@ def general_report_as_pdf(payload, original_image=None, result_image=None):
             _quality_table(quality["checks"], styles, general=True),
             Paragraph("Report limitation", styles["Section"]),
             Paragraph(
-                "This technical enhancement is not a validated disease detector. A qualified clinician must review the original image.",
+                "Enhanced views are algorithmic visual processing aids and must be interpreted by a licensed clinician.",
                 styles["BodySmall"],
             ),
         ]
