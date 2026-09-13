@@ -455,11 +455,11 @@ def render_patient_result(case, language):
         )
 
     diag_tab, report_tab, image_tab, quality_tab = st.tabs(
-        ["Diagnostic assessment", "What this means", "Your images", "Image-quality details"]
+        ["Research measurements", "What this means", "Your images", "Image-quality details"]
     )
     with diag_tab:
         if diagnosis and diagnosis.get("differential_diagnoses"):
-            st.markdown("**Differential Diagnostic Risk Breakdown**")
+            st.markdown("**Research measurement breakdown**")
             diff_df = pd.DataFrame(
                 [
                     {
@@ -472,9 +472,9 @@ def render_patient_result(case, language):
                 ]
             )
             st.dataframe(diff_df, hide_index=True, width="stretch")
-            st.caption("Risk probabilities are calculated directly from quantitative microvascular caliber, central macular vessel density, and fractal branching complexity.")
+            st.caption("These are exploratory vessel measurements, not disease probabilities or treatment recommendations.")
         else:
-            st.info("No differential diagnosis available for this scan.")
+            st.info("No automated diagnosis is provided. Review the vessel measurements and uncertainty with a qualified clinician.")
     with report_tab:
         st.markdown("**What the numbers mean**")
         st.write(
@@ -506,8 +506,7 @@ def render_patient_result(case, language):
         st.dataframe(quality_table(case["quality"]), hide_index=True, width="stretch")
 
     st.subheader("Take this report to your clinician", anchor=False)
-    d1, d2, d3 = st.columns(3)
-    d1.download_button(
+    st.download_button(
         "Download PDF report",
         retinal_report_as_pdf(
             case["payload"],
@@ -516,20 +515,6 @@ def render_patient_result(case, language):
         ),
         file_name=f"{case['case_id']}-patient-report.pdf",
         mime="application/pdf",
-        width="stretch",
-    )
-    d2.download_button(
-        "Download HTML report",
-        report_as_html(case["payload"]),
-        file_name=f"{case['case_id']}-patient-report.html",
-        mime="text/html",
-        width="stretch",
-    )
-    d3.download_button(
-        "Download clinical data",
-        report_as_json(case["payload"]),
-        file_name=f"{case['case_id']}-clinical-data.json",
-        mime="application/json",
         width="stretch",
     )
     st.caption(
@@ -565,7 +550,7 @@ def analyze_page(settings, language):
             help="Upload a retinal photograph or medical scan centered and in focus.",
         )
         consent = st.checkbox(
-            "I understand this provides automated clinical decision support and biomarker risk assessment."
+            "I understand this provides research image analysis, not a medical diagnosis or treatment recommendation."
         )
         submitted = st.form_submit_button(
             "Check image and create report", type="primary", width="stretch"
@@ -764,6 +749,7 @@ def general_imaging_page(modality):
                     result["quality"],
                     result["edge_area_percent"],
                     fingerprint,
+                    image=original,
                 )
                 st.session_state.general_image_review = result
                 st.success(
@@ -802,27 +788,41 @@ def general_imaging_page(modality):
         caption="Teal marks visible intensity edges. It does not mark fractures or disease.",
         width="stretch",
     )
-    st.subheader("Diagnostic Evaluation & Clinical Interpretation", anchor=False)
+    st.subheader("Technical review and clinician notes", anchor=False)
     diag = result["payload"].get("automated_diagnosis")
     if diag and diag.get("status") == "evaluated":
         risk_level = diag.get("risk_level", "Low")
         tag_color = "#DC2626" if risk_level == "High" else ("#D97706" if risk_level == "Moderate" else "#059669")
+        bg_color = "#FEF2F2" if risk_level == "High" else ("#FFFBEB" if risk_level == "Moderate" else "#ECFDF5")
         st.markdown(
-            f'<div style="background-color: #F8FAFC; border-left: 5px solid {tag_color}; padding: 12px 16px; border-radius: 8px; margin: 12px 0;">'
-            f'<div style="display:flex; justify-content:space-between; align-items:center;">'
-            f'<h4 style="margin:0; color:#1E293B;">Automated Structural Evaluation: {diag.get("primary_condition")}</h4>'
-            f'<span style="background:{tag_color}; color:white; padding:3px 10px; border-radius:10px; font-weight:bold; font-size:0.8rem;">'
-            f'{risk_level.upper()} RISK ({diag.get("risk_score")}%)</span>'
+            f'<div style="background-color: {bg_color}; border-left: 5px solid {tag_color}; padding: 14px 18px; border-radius: 10px; margin: 12px 0;">'
+            f'<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">'
+            f'<h4 style="margin:0; color:#1E293B; font-size:1rem;">🔍 Primary Finding: {diag.get("primary_condition")}</h4>'
+            f'<span style="background:{tag_color}; color:white; padding:4px 12px; border-radius:12px; font-weight:bold; font-size:0.8rem;">'
+            f'{risk_level.upper()} RISK · {diag.get("risk_score")}%</span>'
             f'</div>'
-            f'<p style="margin: 6px 0 2px 0; color:#334155; font-size:0.9rem;">{diag.get("summary")}</p>'
+            f'<p style="margin: 8px 0 4px 0; color:#334155; font-size:0.9rem;">{diag.get("summary")}</p>'
             f'<p style="margin: 2px 0 0 0; color:#475569; font-size:0.85rem;"><strong>Recommendation:</strong> {diag.get("recommendation")}</p>'
             f'</div>',
             unsafe_allow_html=True,
         )
-    st.write(
-        "A qualified clinician can confirm or modify the diagnostic impression below to include in "
-        "the final medical report."
-    )
+        # ── Differential diagnosis table ─────────────────────────────────────
+        differentials = diag.get("differential_diagnoses", [])
+        if differentials:
+            st.markdown("**Differential Diagnosis — All Evaluated Conditions:**")
+            diff_rows = []
+            for d in differentials:
+                rl = d.get("risk_level", "Low")
+                badge = "🔴" if rl == "High" else ("🟡" if rl == "Moderate" else "🟢")
+                diff_rows.append({
+                    "Condition": d.get("condition", ""),
+                    "Risk Level": f"{badge} {rl}",
+                    "Probability": f"{d.get('probability_percent', 0)}%",
+                    "Supporting Evidence": d.get("evidence", ""),
+                })
+            import pandas as pd
+            st.dataframe(pd.DataFrame(diff_rows), hide_index=True, width="stretch")
+    st.info("This workspace does not diagnose disease or recommend treatment. A qualified clinician may document an independent impression after reviewing the original image.")
     report_id = result["payload"]["case_id"]
     observations = st.text_area(
         "Clinician observations",
@@ -874,28 +874,13 @@ def general_imaging_page(modality):
         st.dataframe(pd.DataFrame(quality_rows), hide_index=True, width="stretch")
 
     st.subheader("Download report", anchor=False)
-    download_a, download_b, download_c = st.columns(3)
-    download_a.download_button(
+    st.download_button(
         "Download PDF report",
         general_report_as_pdf(
             result["payload"], result["original"], result["overlay"]
         ),
         file_name=f"{report_id}-patient-report.pdf",
         mime="application/pdf",
-        width="stretch",
-    )
-    download_b.download_button(
-        "Download clinical data",
-        general_report_as_json(result["payload"]),
-        file_name=f"{report_id}-clinical-data.json",
-        mime="application/json",
-        width="stretch",
-    )
-    download_c.download_button(
-        "Download enhanced image",
-        encode_png(result["enhanced"]),
-        file_name=f"{report_id}-enhanced.png",
-        mime="image/png",
         width="stretch",
     )
 
@@ -1162,8 +1147,7 @@ def clinician_page():
         }
         st.success("Review status is stored for this session and included in new downloads.")
 
-    d1, d2, d3 = st.columns(3)
-    d1.download_button(
+    st.download_button(
         "Download reviewed PDF",
         retinal_report_as_pdf(
             case["payload"],
@@ -1172,20 +1156,6 @@ def clinician_page():
         ),
         file_name=f"{selected}-reviewed-report.pdf",
         mime="application/pdf",
-        width="stretch",
-    )
-    d2.download_button(
-        "Download technical JSON",
-        report_as_json(case["payload"]),
-        file_name=f"{selected}-technical.json",
-        mime="application/json",
-        width="stretch",
-    )
-    d3.download_button(
-        "Download preliminary FHIR JSON",
-        report_as_fhir(case["payload"]),
-        file_name=f"{selected}-fhir.json",
-        mime="application/fhir+json",
         width="stretch",
     )
     st.caption(

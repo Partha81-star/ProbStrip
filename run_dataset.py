@@ -1,11 +1,13 @@
 import argparse
+import random
 from pathlib import Path
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
 from data.dataset import ElongatedStructureDataset
-from data.discovery import discover_image_mask_pairs, group_aware_split
+from data.discovery import discover_image_mask_pairs, dataset_manifest, group_aware_split
 from models.probabilistic_unet import ProbabilisticUNet
 from training.trainer import ProbStripTrainer
 
@@ -22,10 +24,19 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--checkpoint-dir", default="checkpoints")
     parser.add_argument("--cpu", action="store_true")
+    parser.add_argument("--patience", type=int, default=8)
+    parser.add_argument("--min-delta", type=float, default=1e-4)
+    parser.add_argument("--dataset-name", default=None)
     return parser.parse_args()
 
 
 def main(args):
+    random.seed(args.seed)
+    np.random.seed(args.seed)
+    torch.manual_seed(args.seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(args.seed)
+    torch.use_deterministic_algorithms(True, warn_only=True)
     pairs = discover_image_mask_pairs(args.dataset_dir)
     if len(pairs) < 2:
         raise ValueError("At least two image/mask pairs are required")
@@ -75,6 +86,9 @@ def main(args):
         device=device,
         checkpoint_dir=args.checkpoint_dir,
         metadata={
+            "training_protocol": "group-aware supervised vessel segmentation",
+            "dataset_name": args.dataset_name or Path(args.dataset_dir).resolve().name,
+            "dataset_manifest": dataset_manifest(pairs),
             "dataset_root_name": Path(args.dataset_dir).resolve().name,
             "pair_count": len(pairs),
             "train_count": len(train_pairs),
@@ -85,7 +99,14 @@ def main(args):
             "model_features": [32, 64, 128, 256],
             "strip_kernel_size": 7,
             "dropout_probability": 0.2,
+            "seed": args.seed,
+            "optimizer": "AdamW",
+            "loss": "BCE + Dice",
+            "augmentation": "horizontal/vertical flip, elastic deformation, glare simulation",
+            "selection_rule": "maximize validation Dice minus 0.25 * ECE",
         },
+        early_stopping_patience=args.patience,
+        min_delta=args.min_delta,
     )
     trainer.train(num_epochs=args.epochs)
 

@@ -293,7 +293,8 @@ def retinal_report_as_pdf(payload, original_image=None, result_image=None):
         Paragraph(f"<b>{_safe(outcome_text)}</b>", styles["BodySmall"]),
         Spacer(1, 2 * mm),
         Paragraph(
-            "The values below describe the extracted quantitative biomarkers and software output.",
+            "The values below describe research measurements and software output. "
+            + _safe(payload.get("diagnosis_message", "No automated diagnosis was generated.")),
             styles["BodySmall"],
         ),
     ]

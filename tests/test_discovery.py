@@ -1,6 +1,7 @@
 from pathlib import Path
 
 from data.discovery import (
+    dataset_manifest,
     discover_image_mask_pairs,
     group_aware_split,
     subject_group,
@@ -38,3 +39,22 @@ def test_group_split_keeps_paired_eyes_together():
     assert train_groups
     assert validation_groups
     assert train_groups.isdisjoint(validation_groups)
+
+
+def test_dataset_manifest_is_reproducible(tmp_path):
+    images = tmp_path / "Images"
+    masks = tmp_path / "Masks"
+    images.mkdir()
+    masks.mkdir()
+    image = images / "Image_01L.jpg"
+    mask = masks / "Image_01L_1stHO.png"
+    image.write_bytes(b"image")
+    mask.write_bytes(b"mask")
+
+    pairs = discover_image_mask_pairs(tmp_path)
+    first = dataset_manifest(pairs)
+    second = dataset_manifest(pairs)
+
+    assert first == second
+    assert first["pair_count"] == 1
+    assert len(first["pairs_sha256"]) == 64

@@ -23,7 +23,8 @@ def test_general_report_is_created_without_claiming_diagnosis():
 
     assert payload["report_status"] == "technical image review generated"
     assert payload["automated_diagnosis"] is None
-    assert "Awaiting review" in report
+    assert "technical image review only" in payload["diagnosis_message"]
+    assert "No automated diagnosis" in report
 
 
 def test_general_report_includes_confirmed_clinician_impression():

@@ -91,5 +91,5 @@ def test_patient_pdf_is_valid_and_contains_safety_content():
 
     assert pdf.startswith(b"%PDF-")
     assert len(reader.pages) >= 1
-    assert "No automated diagnosis was generated" in text
+    assert "No automated diagnosis was generated" in text.replace("\n", " ")
     assert "Image-quality checks" in text

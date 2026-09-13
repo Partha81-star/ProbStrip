@@ -2,9 +2,6 @@ import html
 import json
 from datetime import datetime, timezone
 
-from clinical.diagnosis import assess_retinal_diagnosis
-
-
 def make_case_id(timestamp=None):
     timestamp = timestamp or datetime.now(timezone.utc)
     return timestamp.strftime("PS-%Y%m%d-%H%M%S-%f")[:-3]
@@ -22,13 +19,12 @@ def make_report_payload(
             "an examination by a qualified healthcare professional."
         )
     )
-    diagnosis = assess_retinal_diagnosis(measures)
     return {
         "case_id": case_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "intended_use": "Decision support for retinal vessel mapping and microvascular disease risk assessment",
-        "diagnosis": diagnosis,
-        "diagnosis_message": diagnosis.get("summary", ""),
+        "intended_use": "Research support for retinal vessel mapping and image-quality review",
+        "diagnosis": None,
+        "diagnosis_message": "No diagnosis was made. No automated diagnosis was generated. Vessel measurements are research outputs only.",
         "quality": quality.to_dict(),
         "research_measures": measures,
         "review_outcome": outcome,
@@ -94,6 +90,7 @@ def report_as_html(payload):
         f"<p><strong>Created:</strong> {html.escape(payload['created_at'])}</p><div class='notice'>"
         f"{html.escape(payload['safety_notice'])}</div>{diag_block}<h2>Image quality: "
         f"{quality['score']}/100</h2><p>{html.escape(outcome.get('explanation', ''))}</p>"
+        f"<p><strong>Scope:</strong> {html.escape(payload.get('diagnosis_message', 'No automated diagnosis was generated.'))}</p>"
         f"{review_block}<h2>Vascular measurements</h2><table><tr><th>Measure</th><th>Value</th>"
         f"</tr>{rows}</table></body></html>"
     )
@@ -110,19 +107,12 @@ def report_as_fhir(payload):
                 + (review.get("note") or "No note provided.")
             }
         )
-    diag = payload.get("diagnosis") or {}
-    if diag:
-        notes.append(
-            {
-                "text": f"Diagnostic evaluation: {diag.get('primary_condition', '')} - {diag.get('risk_level', '')} Risk ({diag.get('risk_score', 0)}%)"
-            }
-        )
     return json.dumps(
         {
             "resourceType": "DiagnosticReport",
             "id": payload.get("case_id", "").lower(),
             "status": "preliminary",
-            "category": [{"text": "Clinical decision support retinal image analysis"}],
+            "category": [{"text": "Research retinal image analysis"}],
             "code": {"text": "Retinal vessel mapping and diagnostic risk assessment"},
             "effectiveDateTime": payload.get("created_at", ""),
             "conclusion": review.get("impression") or payload.get("diagnosis_message", ""),

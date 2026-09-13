@@ -1,5 +1,6 @@
 import random
 import re
+import hashlib
 from pathlib import Path
 
 
@@ -36,6 +37,29 @@ def discover_image_mask_pairs(dataset_dir):
     return pairs
 
 
+def dataset_manifest(pairs):
+    """Create a reproducible, privacy-preserving manifest for a training run."""
+    records = []
+    digest = hashlib.sha256()
+    for image_path, mask_path in pairs:
+        image_path = Path(image_path)
+        mask_path = Path(mask_path)
+        record = {
+            "image_name": image_path.name,
+            "mask_name": mask_path.name,
+            "image_bytes": image_path.stat().st_size,
+            "mask_bytes": mask_path.stat().st_size,
+        }
+        records.append(record)
+        digest.update(f"{record['image_name']}:{record['image_bytes']}".encode())
+        digest.update(f"{record['mask_name']}:{record['mask_bytes']}".encode())
+    return {
+        "pair_count": len(records),
+        "pairs_sha256": digest.hexdigest(),
+        "pairs": records,
+    }
+
+
 def subject_group(image_path) -> str:
     """Infer a conservative group key for common paired-eye filename conventions."""
     stem = Path(image_path).stem
@@ -70,4 +94,3 @@ def group_aware_split(pairs, validation_fraction=0.2, seed=42):
             if subject_group(pair[0]) != moved_group
         ]
     return train, validation
-

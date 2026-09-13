@@ -21,6 +21,13 @@ technical quality checks, local contrast enhancement, and intensity-edge
 visualization only. It does not use this retinal checkpoint and is not an
 anatomy, fracture, lesion, or disease detector.
 
+## Automated diagnosis and treatment
+
+Automated diagnostic and treatment recommendations are disabled. The application
+shows technical image review, vessel segmentation, uncertainty, and exploratory
+measurements only. A clinician may add an independent impression and next step
+after reviewing the original image and patient context.
+
 ## Prohibited use
 
 Do not use this checkpoint to diagnose, exclude, triage, or treat disease. Do
@@ -44,6 +51,16 @@ are not available for the included checkpoint. This is a major limitation.
 - Monte Carlo dropout variance is not a guarantee of correctness.
 - Morphology measurements can change with threshold, image quality, scale, and
   registration error.
+
+## Professional training protocol
+
+Train only with an approved, documented dataset containing clinician-reviewed
+vessel masks. Use patient-level grouping, a locked external test set, fixed
+random seeds, and a recorded dataset manifest. Select checkpoints using
+validation performance and calibration, then report Dice, IoU, sensitivity,
+specificity, calibration error, selective risk, topology errors, subgroup
+performance, and failure cases. The repository's `run_dataset.py` records these
+training settings and writes `best_model.pth`.
 
 ## Evaluation requirements
 

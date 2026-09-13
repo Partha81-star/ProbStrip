@@ -10,7 +10,7 @@ def test_initial_patient_screen_renders_without_exception():
     assert not app.exception
     assert app.header[0].value == "Review a medical image"
     assert "not a medical diagnosis" in app.checkbox[0].label
-    assert "Use camera" in app.radio[0].options
+    assert "Camera and live" in app.radio[0].options
 
 
 def test_camera_screen_is_lazy_and_mobile_capture_is_available():

@@ -2,10 +2,7 @@ import html
 import json
 from datetime import datetime, timezone
 
-from clinical.diagnosis import assess_general_diagnosis
-
-
-def make_general_report_payload(case_id, modality, quality, edge_area, fingerprint):
+def make_general_report_payload(case_id, modality, quality, edge_area, fingerprint, image=None):
     observations = []
     failed = [check["name"] for check in quality["checks"] if not check["ok"]]
     if failed:
@@ -17,15 +14,15 @@ def make_general_report_payload(case_id, modality, quality, edge_area, fingerpri
     observations.append(
         f"A structure-edge view was created; visible edges cover {edge_area:.2f}% of the image."
     )
-    diagnosis = assess_general_diagnosis(modality, edge_area, quality["score"])
     return {
         "case_id": case_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
         "imaging_type": modality,
         "image_fingerprint": fingerprint,
         "report_status": "technical image review generated",
-        "automated_diagnosis": diagnosis,
-        "diagnosis_message": diagnosis.get("summary", ""),
+        "automated_diagnosis": None,
+        "diagnosis_message": "No automated diagnosis was generated. This workflow provides technical image review only.",
+        "analysis_scope": "Technical quality, contrast, and visible edge review only.",
         "technical_quality": quality,
         "visible_edge_area_percent": edge_area,
         "technical_observations": observations,
@@ -35,6 +32,7 @@ def make_general_report_payload(case_id, modality, quality, edge_area, fingerpri
             "with the original image. Correlate with clinical history and patient symptoms."
         ),
     }
+
 
 
 def general_report_as_json(payload):
@@ -61,14 +59,7 @@ def general_report_as_html(payload):
         diagnosis = html.escape(clinician.get("impression") or "No diagnosis entered.")
         rec = html.escape(clinician.get("recommendation") or "None entered.")
         review_html = f"<h2>Clinician review</h2><p><b>Impression:</b> {diagnosis}</p><p><b>Next step:</b> {rec}</p>"
-    diag = payload.get("automated_diagnosis") or {}
-    diag_html = ""
-    if diag:
-        diag_html = (
-            f"<h2>Diagnostic Evaluation</h2><p><b>Primary Condition:</b> {html.escape(diag.get('primary_condition', ''))} "
-            f"({html.escape(diag.get('risk_level', ''))} Risk - {diag.get('risk_score', 0)}%)</p>"
-            f"<p>{html.escape(diag.get('summary', ''))}</p>"
-        )
+    diag_html = "<h2>Scope</h2><p>Technical image review only. No automated diagnosis or treatment advice was generated.</p>"
     return (
         f"<!DOCTYPE html><html><body><h1>ProbStrip General Image Review</h1>"
         f"{diag_html}<h2>Quality checks</h2><table>{checks}</table>"

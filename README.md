@@ -83,10 +83,12 @@ pytest -q
 Datasets use a simple `Images/` and `Masks/` directory layout. Common CHASE_DB1
 mask names such as `Image_01L_1stHO.png` are discovered automatically. Training
 uses inferred subject groups so paired eyes are not split across training and
-validation.
+validation. The training command records a reproducible dataset manifest, seed,
+preprocessing, augmentation, optimizer, and model-selection rule in checkpoint
+metadata. It writes `best_model.pth` and restores that model for `latest_model.pth`.
 
 ```powershell
-python run_dataset.py C:\path\to\dataset --epochs 20
+python run_dataset.py C:\path\to\dataset --epochs 50 --patience 8 --dataset-name CHASE_DB1
 python evaluate_dataset.py C:\path\to\independent-validation-data --output-dir evaluation_results
 ```
 
@@ -94,7 +96,9 @@ Evaluation writes per-image Dice, IoU, sensitivity, specificity, calibration,
 uncertainty, and topology-error measurements. It also writes a dataset-specific
 `calibration_profile.json`. Review that artifact before copying it to
 `calibration/profile.json`; the app will then disclose and use those thresholds.
-This does not make the model clinically calibrated.
+This does not make the model clinically calibrated or authorize diagnosis or
+treatment. Use an independent, locked, patient-level test set and
+clinician-reviewed labels before any prospective study.
 
 ## Free deployment on Streamlit Community Cloud
 
