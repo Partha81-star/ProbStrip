@@ -22,6 +22,9 @@ def parse_args():
     parser.add_argument("--group-column")
     parser.add_argument("--task-id", required=True)
     parser.add_argument("--dataset-name", required=True)
+    parser.add_argument("--dataset-license", required=True)
+    parser.add_argument("--dataset-source-url", required=True)
+    parser.add_argument("--intended-population", required=True)
     parser.add_argument("--image-extension", default=".jpg")
     parser.add_argument("--path-column")
     parser.add_argument("--image-size", type=int, default=224)
@@ -49,9 +52,17 @@ def binary_metrics(probabilities, labels, threshold=0.5):
     fn = int(np.sum(~predictions & positives))
     sensitivity = tp / max(tp + fn, 1)
     specificity = tn / max(tn + fp, 1)
-    order = np.argsort(probabilities)
-    ranks = np.empty_like(order, dtype=np.float64)
-    ranks[order] = np.arange(1, len(probabilities) + 1)
+    order = np.argsort(probabilities, kind="stable")
+    sorted_probabilities = probabilities[order]
+    ranks = np.empty_like(probabilities, dtype=np.float64)
+    start = 0
+    while start < len(order):
+        end = start + 1
+        while end < len(order) and sorted_probabilities[end] == sorted_probabilities[start]:
+            end += 1
+        average_rank = ((start + 1) + end) / 2.0
+        ranks[order[start:end]] = average_rank
+        start = end
     positive_ranks = float(np.sum(ranks[positives]))
     auc = (positive_ranks - np.sum(positives) * (np.sum(positives) + 1) / 2) / max(np.sum(positives) * np.sum(negatives), 1)
     bins = np.linspace(0, 1, 11)
@@ -61,6 +72,7 @@ def binary_metrics(probabilities, labels, threshold=0.5):
         if np.any(selected):
             ece += np.mean(selected) * abs(np.mean(probabilities[selected]) - np.mean(labels[selected]))
     return {
+        "threshold": round(float(threshold), 6),
         "auc": round(float(auc), 6),
         "sensitivity": round(float(sensitivity), 6),
         "specificity": round(float(specificity), 6),
@@ -72,6 +84,12 @@ def binary_metrics(probabilities, labels, threshold=0.5):
         "fp": fp,
         "fn": fn,
     }
+
+
+def select_balanced_threshold(probabilities, labels):
+    candidates = np.linspace(0.01, 0.99, 99)
+    scored = [binary_metrics(probabilities, labels, threshold) for threshold in candidates]
+    return max(scored, key=lambda item: (item["balanced_accuracy"], item["sensitivity"], item["specificity"]))["threshold"]
 
 
 def evaluate(model, loader, criterion, device):
@@ -87,7 +105,12 @@ def evaluate(model, loader, criterion, device):
             loss_total += criterion(logits, targets).item() * images.size(0)
             probabilities.extend(torch.sigmoid(logits).cpu().tolist())
             labels.extend(targets.cpu().int().tolist())
-    return {"loss": loss_total / len(loader.dataset), **binary_metrics(probabilities, labels)}
+    threshold = select_balanced_threshold(probabilities, labels)
+    return {
+        "loss": loss_total / len(loader.dataset),
+        "threshold_source": "validation balanced-accuracy optimization",
+        **binary_metrics(probabilities, labels, threshold),
+    }
 
 
 def save_checkpoint(path, model, metadata):
@@ -147,6 +170,9 @@ def main(args):
     base_metadata = {
         "task_id": args.task_id,
         "dataset_name": args.dataset_name,
+        "dataset_license": args.dataset_license,
+        "dataset_source_url": args.dataset_source_url,
+        "intended_population": args.intended_population,
         "dataset_manifest_sha256": manifest_digest,
         "sample_count": len(records),
         "train_count": len(train_records),
@@ -195,7 +221,19 @@ def main(args):
     model.load_state_dict(best["model_state_dict"])
     final_metrics = evaluate(model, validation_loader, criterion, device)
     save_checkpoint(checkpoint_dir / "latest_model.pth", model, {**base_metadata, "best_epoch": best_epoch, "validation_metrics": final_metrics})
-    report = {"metadata": base_metadata, "best_epoch": best_epoch, "validation_metrics": final_metrics, "history": history}
+    report = {
+        "release_status": "research_only",
+        "release_blockers": [
+            "independent external test set not evaluated",
+            "subgroup and acquisition-shift performance not established",
+            "prospective clinical validation not completed",
+            "regulatory status not established",
+        ],
+        "metadata": base_metadata,
+        "best_epoch": best_epoch,
+        "validation_metrics": final_metrics,
+        "history": history,
+    }
     (checkpoint_dir / "training_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(f"Saved best research checkpoint and report to {checkpoint_dir}")
 

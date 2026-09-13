@@ -1,3 +1,5 @@
+import json
+import os
 from pathlib import Path
 
 
@@ -41,4 +43,19 @@ def model_task_status(modality, app_root):
     task["checkpoint"] = str(checkpoint)
     task["available"] = checkpoint.is_file()
     task["clinical_readiness"] = "research-only" if task["available"] else "not trained"
+    report_path = checkpoint.parent / "training_report.json"
+    task["release_status"] = "research_only"
+    task["validation_metrics"] = {}
+    if report_path.is_file():
+        try:
+            report = json.loads(report_path.read_text(encoding="utf-8"))
+            task["release_status"] = report.get("release_status", "research_only")
+            task["validation_metrics"] = report.get("validation_metrics", {})
+        except (OSError, ValueError):
+            task["release_status"] = "invalid_report"
+    task["patient_inference_enabled"] = (
+        task["available"]
+        and task["release_status"] == "externally_validated"
+        and os.getenv("PROBSTRIP_ENABLE_VALIDATED_MODELS") == "1"
+    )
     return task

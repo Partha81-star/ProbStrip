@@ -8,7 +8,7 @@ from clinical.model_registry import model_task_status
 from data.classification_dataset import BinaryImageDataset, group_stratified_split, load_binary_records
 from models.medical_classifier import CompactMedicalClassifier
 from prepare_medical_dataset import prepare_chexpert, prepare_mura
-from train_classifier import binary_metrics
+from train_classifier import binary_metrics, select_balanced_threshold
 
 
 def test_binary_dataset_and_grouped_split(tmp_path):
@@ -44,6 +44,8 @@ def test_classifier_output_and_metrics():
     assert metrics["auc"] == 1.0
     assert metrics["sensitivity"] == 1.0
     assert metrics["specificity"] == 1.0
+    assert binary_metrics([0.5, 0.5], [0, 1])["auc"] == 0.5
+    assert 0 < select_balanced_threshold([0.1, 0.9, 0.2, 0.8], [0, 1, 0, 1]) < 1
 
 
 def test_registry_reports_missing_and_available_models(tmp_path):
@@ -56,6 +58,7 @@ def test_registry_reports_missing_and_available_models(tmp_path):
     available = model_task_status("Skin or external photo", tmp_path)
     assert available["available"] is True
     assert available["clinical_readiness"] == "research-only"
+    assert available["patient_inference_enabled"] is False
 
 
 def test_mura_and_chexpert_manifest_adapters(tmp_path):
