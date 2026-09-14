@@ -1,44 +1,27 @@
 # ProbStrip
 
-ProbStrip is a patient-friendly medical-image screening application. Its retinal
-workflow combines a StripConv U-Net with Monte Carlo dropout to create a vessel
-map and highlight areas where repeated model passes disagree.
+ProbStrip is a responsive Streamlit medical-image screening application with
+three supported workflows:
 
-The bone and joint X-ray workflow runs a FracAtlas YOLOv8 model, localizes
-fracture candidates, displays model confidence, and produces a downloadable PDF.
-Other image categories remain available for display enhancement, but do not show
-disease findings unless a task-specific checkpoint has been validated and wired in.
+- retinal fundus vessel segmentation with uncertainty visualization;
+- bone and joint X-ray fracture-candidate localization;
+- pediatric chest X-ray pneumonia-pattern classification.
 
-The public interface is designed for patients and clinicians to review the same
-result at different levels of detail. It deliberately does **not** generate a
-medical diagnosis.
+Each completed screening produces a patient-friendly result, model score or
+screening status, suggested next step, and downloadable PDF. An optional
+language service converts structured model output into simpler wording; images
+and patient identifiers are not sent to that service.
 
-## Current workflow
+## Model scope
 
-1. Select retinal, X-ray, CT, MRI, ultrasound, or external imaging on **Review image**.
-2. Upload an image, capture one with the device camera, or use the retinal demonstration.
-3. Run the internal capture checks needed before model inference.
-4. For retinal images, produce a teal vessel overlay and mark uncertain areas in amber.
-5. For bone and joint X-rays, localize fracture candidates with red boxes.
-6. Explain the detected finding and model confidence in patient-friendly language.
-7. Download a printable PDF with the detected result and reviewed images, an
-   HTML report, technical JSON, or preliminary FHIR-shaped JSON.
-8. Compare retinal research measurements from two usable images in the current session.
-9. Capture a still image on a phone or preview a live retinal overlay with WebRTC.
-10. Refine or replace a vessel mask in the clinician review workspace.
-11. Register two retinal visits before showing a guarded vessel-map change view.
+The fracture detector uses the published FracAtlas YOLOv8 checkpoint. The chest
+classifier was trained locally on PneumoniaMNIST and evaluated on its held-out
+test split. The retinal checkpoint maps vessels from fundus images; it does not
+classify retinal infection or other eye diseases. These limitations are shown
+in the application because a model score is not the same as diagnostic certainty.
 
-## Safety and intended use
-
-ProbStrip is an educational and research prototype. It has not been validated
-or authorized as a medical device and must not be used to diagnose, rule out,
-or treat disease. The current checkpoint was developed from a small retinal
-vessel dataset. A qualified healthcare professional must review the original
-image and any generated map.
-
-Images are processed in memory and are not intentionally written to disk by the
-Streamlit application. A public demo is not an appropriate place for
-identifiable patient data.
+ProbStrip does not prescribe medication. Urgent or worsening symptoms require
+medical care even when a screening result is negative.
 
 ## Run locally
 
@@ -51,26 +34,30 @@ python -m pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The default retinal checkpoint is `checkpoints/latest_model.pth`. Override it with the
-`PROBSTRIP_CHECKPOINT` environment variable. The application fails visibly and
-does not return a prediction if the checkpoint cannot be loaded.
+The default retinal checkpoint is `checkpoints/latest_model.pth`. The fracture
+checkpoint is `checkpoints/fracture/yolov8_localization_fractureAtlas.pt`; the
+pneumonia checkpoint is
+`checkpoints/classifiers/pneumoniamnist_pneumonia/latest_model.pth`.
 
-The fracture-localization checkpoint is
-`checkpoints/fracture/yolov8_localization_fractureAtlas.pt`.
+## Patient explanations
 
-### Camera modes
+The app works without an external API key and falls back to deterministic text.
+To enable API-assisted plain-language explanations, create a new restricted API
+key and configure one of these secrets:
 
-- **Take a photo** uses Streamlit's native camera control and is the recommended
-  path on phones. A captured still receives the same quality gate and full
-  uncertainty report as an uploaded image.
-- **Live vessel preview** uses WebRTC and a throttled 128px single model pass.
-  It is intended for positioning feedback only and does not calculate the
-  uncertainty values shown in a saved report.
+```toml
+GOOGLE_API_KEY = "your-new-restricted-key"
+```
 
-Browser camera access requires HTTPS except on `localhost`. Streamlit Community
-Cloud supplies HTTPS automatically. The app includes a public STUN server for
-connection setup; restrictive institutional or mobile networks may also require
-a separately configured TURN service.
+Use `.streamlit/secrets.toml.example` as the template. Never commit
+`.streamlit/secrets.toml`; it is ignored by Git.
+
+## Camera modes
+
+The upload page accepts a device-camera still for all supported image types.
+The camera page also provides a low-latency retinal vessel preview using WebRTC.
+Camera access requires HTTPS outside `localhost`; Streamlit Community Cloud
+provides HTTPS.
 
 ## Test
 
@@ -81,87 +68,50 @@ pytest -q
 
 ## Train and evaluate
 
-Datasets use a simple `Images/` and `Masks/` directory layout. Common CHASE_DB1
-mask names such as `Image_01L_1stHO.png` are discovered automatically. Training
-uses inferred subject groups so paired eyes are not split across training and
-validation. The training command records a reproducible dataset manifest, seed,
-preprocessing, augmentation, optimizer, and model-selection rule in checkpoint
-metadata. Training may create `best_model.pth` locally and restores that model as
-`latest_model.pth`. Only `latest_model.pth` is retained as a deployment artifact.
+Retinal segmentation:
 
 ```powershell
 python run_dataset.py C:\path\to\dataset --epochs 50 --patience 8 --dataset-name CHASE_DB1
 python evaluate_dataset.py C:\path\to\independent-validation-data --output-dir evaluation_results
 ```
 
-Evaluation writes per-image Dice, IoU, sensitivity, specificity, calibration,
-uncertainty, and topology-error measurements. It also writes a dataset-specific
-`calibration_profile.json`. Review that artifact before copying it to
-`calibration/profile.json`; the app will then disclose and use those thresholds.
-This does not make the model clinically calibrated or authorize diagnosis or
-treatment. Use an independent, locked, patient-level test set and
-clinician-reviewed labels before any prospective study.
-
-### FracAtlas fracture localization
-
-Keep the extracted FracAtlas dataset outside Git, prepare deterministic
-image-level splits, then train and evaluate the lightweight detector:
+Fracture localization:
 
 ```powershell
 python prepare_fracatlas.py "C:\path\to\FracAtlas" "C:\path\to\FracAtlas-yolo"
 python train_fracatlas.py "C:\path\to\FracAtlas-yolo\dataset.yaml" --epochs 50
 ```
 
-The training command stores the best checkpoint and a JSON test-metrics report
-under `checkpoints/fracture/`. FracAtlas does not provide patient identifiers, so
-these splits cannot establish patient-independent or external performance.
+The checked-in pneumonia checkpoint was trained with the generic classification
+pipeline using PneumoniaMNIST. Provenance and measured test performance are in
+`checkpoints/classifiers/pneumoniamnist_pneumonia/training_report.json`.
 
-## Free deployment on Streamlit Community Cloud
+## Deploy free on Streamlit Community Cloud
 
-1. Sign in at <https://share.streamlit.io> using the GitHub account that owns
-   this repository.
-2. Select **Create app** and choose `Partha81-star/ProbStrip`.
-3. Use branch `main` and entrypoint `app.py`.
-4. In advanced settings, select Python 3.11.
-5. Deploy. Updates pushed to `main` are redeployed automatically.
+1. Sign in at <https://share.streamlit.io> with the GitHub account that owns the repository.
+2. Create an app from `Partha81-star/ProbStrip`, branch `main`, entrypoint `app.py`.
+3. Select Python 3.11 in advanced settings.
+4. Add the replacement API key to the app's Secrets field using the TOML name above.
+5. Deploy. New commits to `main` are redeployed automatically.
 
-The app is optimized for CPU use by limiting stochastic passes. Training is kept
-in offline scripts and is intentionally absent from the public interface.
+Images are processed in memory and are not intentionally saved by the app. Do
+not upload identifiable medical images to a public demonstration deployment.
 
 ## Project structure
 
 ```text
-app.py                         Patient and clinician Streamlit experience
-clinical/modalities.py         Multi-modality quality and structure views
-clinical/fracture_detection.py FracAtlas fracture inference and box overlays
-clinical/quality.py            Acquisition-quality gate
-clinical/analysis.py           Visuals, research measurements, review outcome
-clinical/reporting.py          HTML, JSON, and preliminary FHIR exports
-clinical/pdf_reporting.py      Printable patient and clinician PDF reports
-clinical/live.py               Throttled real-time WebRTC frame processor
-clinical/biomarkers.py         Vessel morphology and mask refinement
-clinical/registration.py       Guarded affine visit registration and change maps
-clinical/calibration.py        Validation-derived threshold analysis
-models/                        Probabilistic StripConv U-Net
-inference/                     Monte Carlo dropout inference
-training/                      Offline training utilities
-evaluate_dataset.py            External evaluation and calibration profile CLI
-prepare_fracatlas.py           Deterministic FracAtlas YOLO split builder
-train_fracatlas.py             FracAtlas detector training and holdout evaluation
-tests/                         Safety and report behavior tests
+app.py                              Responsive Streamlit interface
+clinical/chest_detection.py         Pneumonia classifier inference
+clinical/fracture_detection.py      Fracture detector inference and overlays
+clinical/patient_explanation.py     Plain-language structured explanation layer
+clinical/reporting.py               Retinal report exports
+clinical/general_reporting.py       X-ray report exports
+clinical/pdf_reporting.py           Patient PDF generation
+clinical/live.py                    Real-time retinal camera preview
+models/                             Segmentation and classifier architectures
+training/                           Reproducible offline training utilities
+tests/                              Inference, safety, UI, and report tests
 ```
 
-See [MODEL_CARD.md](MODEL_CARD.md) for intended use, provenance gaps, known
-limitations, and the evidence required before a prospective study.
-See [DATASETS.md](DATASETS.md) for modality-specific tasks, official dataset
-sources, access requirements, and release gates.
-
-## Next validation milestones
-
-- Acquire approved FIVES and other adult/pathology-inclusive datasets; data is
-  not redistributed by this repository.
-- Run and publish independent multi-device and multi-site evaluation.
-- Add artery/vein and lesion models only after obtaining suitable labels and
-  defining a clinician-approved intended use.
-- Complete subgroup, privacy, security, accessibility, and usability studies.
-- Conduct prospective clinical studies and applicable regulatory review.
+See `MODEL_CARD.md`, `model_cards/`, and `DATASETS.md` for dataset provenance,
+measured performance, intended populations, and known limitations.

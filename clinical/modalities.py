@@ -13,26 +13,6 @@ MODALITIES = {
         "view": "Chest structure view",
         "guidance": "Include the full chest, side marker, and exposure field. Do not crop the lung edges.",
     },
-    "CT image": {
-        "short": "CT image",
-        "view": "CT structure view",
-        "guidance": "Upload a de-identified PNG or JPEG export using the clinically relevant window.",
-    },
-    "MRI image": {
-        "short": "MRI image",
-        "view": "MRI structure view",
-        "guidance": "Upload a de-identified export and preserve the sequence and orientation outside this prototype.",
-    },
-    "Ultrasound image": {
-        "short": "ultrasound image",
-        "view": "Ultrasound structure view",
-        "guidance": "Use an original still frame with depth and orientation labels visible.",
-    },
-    "Skin or external photo": {
-        "short": "external photograph",
-        "view": "Surface detail view",
-        "guidance": "Use even lighting, include a scale when appropriate, and avoid identifying features.",
-    },
 }
 
 

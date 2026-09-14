@@ -1,120 +1,42 @@
-# ProbStrip dataset and task registry
+# ProbStrip datasets and checkpoints
 
-ProbStrip keeps raw medical datasets outside Git. Only manifests, training code,
-model cards, evaluation reports, and LFS-tracked research checkpoints belong in
-the repository. Dataset access terms and required attribution must be preserved.
+Raw medical datasets remain outside Git. The repository contains deployable
+checkpoints, compact evaluation records, training code, and model cards.
 
-## Current tasks
-
-| App category | Defined research task | Dataset | Access status |
+| App workflow | Model task | Dataset | Integrated status |
 | --- | --- | --- | --- |
-| Retinal fundus | Vessel segmentation | CHASE_DB1-style local set | Trained locally; provenance remains limited |
-| Bone or joint X-ray | Fracture localization | FracAtlas v7 | Downloaded, trained checkpoint integrated |
-| Chest X-ray | Multi-label radiographic finding classification | CheXpert | Stanford AIMI account approval required |
-| CT | Thoracic lung-nodule detection/segmentation | LIDC-IDRI | Open, CC BY 3.0, approximately 133 GB |
-| MRI | Not selected | Not selected | Body region and clinical task required |
-| Ultrasound | Not selected | Not selected | Organ and clinical task required |
-| Skin | Lesion malignancy research classification | ISIC 2024 Permissive | Downloaded locally; 1,000-sample CPU pilot trained |
+| Retinal fundus | Vessel segmentation | CHASE_DB1-style local set | Checkpoint integrated |
+| Bone or joint X-ray | Fracture localization | FracAtlas v7 | Published checkpoint integrated |
+| Chest X-ray | Pneumonia vs normal classification | PneumoniaMNIST | Locally trained checkpoint integrated |
 
-## Official sources
+## Sources
 
-- MURA: <https://stanfordmlgroup.github.io/competitions/mura/>
 - FracAtlas: <https://doi.org/10.6084/m9.figshare.22363012>
-- CheXpert: <https://stanfordmlgroup.github.io/competitions/chexpert/>
 - PneumoniaMNIST: <https://zenodo.org/records/10519652>
-- LIDC-IDRI: <https://www.cancerimagingarchive.net/collection/lidc-idri/>
-- ISIC challenge data: <https://challenge.isic-archive.com/data/>
+- CHASE_DB1: <https://blogs.kingston.ac.uk/retinal/chasedb1/>
 
-## ISIC local preparation
+## Recorded performance
 
-The permissive archive and metadata are stored outside the repository. After
-extracting the archive, build the joined manifest and train a research model:
+The FracAtlas checkpoint's published evaluation reports precision 0.807, recall
+0.473, and mAP50 0.562. The integrated PneumoniaMNIST checkpoint's held-out test
+report records AUROC 0.95549, sensitivity 0.984615, and specificity 0.65812 at
+the configured 0.29 threshold. These values describe their respective test data
+and do not guarantee the same performance on a new hospital, device, age group,
+or photographed display.
 
-```powershell
-python prepare_isic.py "C:\Users\parth\Documents\ProbStrip-datasets\ISIC2024-Permissive"
-python train_classifier.py `
-  "C:\Users\parth\Documents\ProbStrip-datasets\ISIC2024-Permissive\train-image\image" `
-  --labels-csv "C:\Users\parth\Documents\ProbStrip-datasets\ISIC2024-Permissive\training_manifest.csv" `
-  --id-column isic_id --label-column malignant --group-column lesion_id `
-  --task-id skin_malignancy_isic2024 --dataset-name ISIC_2024_Permissive `
-  --dataset-license CC-BY-4.0 `
-  --dataset-source-url https://challenge.isic-archive.com/data/ `
-  --intended-population "Research images matching the ISIC 2024 permissive lesion-crop protocol"
-```
+The retinal model was trained for vessel segmentation. It has no labels for
+retinal infection, diabetic retinopathy, glaucoma, or other eye disease, so the
+application does not claim those findings.
 
-The exact extracted image directory can differ by archive release. Confirm it
-before training. Use a capped pilot run before a full run on local hardware.
+## Reproducibility and release checks
 
-## FracAtlas preparation and training
+Before changing a deployed checkpoint, retain:
 
-The FracAtlas v7 archive is approximately 323 MB compressed. Keep it outside
-Git, then create deterministic image-level train, validation, and test splits:
+- dataset source, license, exclusions, and split method;
+- locked test-set metrics, calibration, and failure examples;
+- intended population and contraindications;
+- checkpoint hash and preprocessing configuration;
+- privacy, security, accessibility, and subgroup evaluation.
 
-```powershell
-python prepare_fracatlas.py "C:\path\to\FracAtlas" "C:\path\to\FracAtlas-yolo"
-python train_fracatlas.py "C:\path\to\FracAtlas-yolo\dataset.yaml" `
-  --epochs 50 --batch 8 --image-size 416
-```
-
-The preparation script uses `dataset.csv` as the authoritative class mapping,
-including two byte-identical images duplicated between source class folders.
-FracAtlas has no patient identifiers, so this is an image-level split and not a
-patient-independent or external clinical test.
-
-## Stanford dataset preparation
-
-After downloading MURA through your Stanford AIMI account:
-
-```powershell
-python prepare_medical_dataset.py mura "C:\path\to\MURA-v1.1" --output mura_manifest.csv
-python train_classifier.py "C:\path\to\MURA-v1.1" `
-  --labels-csv mura_manifest.csv --id-column sample_id --path-column relative_path `
-  --label-column abnormal --group-column patient_id `
-  --task-id mura_abnormality --dataset-name MURA `
-  --dataset-license "Stanford AIMI terms" `
-  --dataset-source-url https://stanfordmlgroup.github.io/competitions/mura/ `
-  --intended-population "Musculoskeletal radiograph studies matching MURA acquisition and labeling"
-```
-
-After downloading CheXpert through your Stanford AIMI account, create one
-explicit finding task at a time. This example uses pleural effusion and records
-the uncertain-label policy:
-
-```powershell
-python prepare_medical_dataset.py chexpert "C:\path\to\CheXpert-v1.0-small" `
-  --label "Pleural Effusion" --uncertain positive --output chexpert_effusion.csv
-python train_classifier.py "C:\path\to\CheXpert-v1.0-small" `
-  --labels-csv chexpert_effusion.csv --id-column sample_id --path-column relative_path `
-  --label-column target --group-column patient_id `
-  --task-id chexpert_pleural_effusion --dataset-name CheXpert `
-  --dataset-license "Stanford AIMI terms" `
-  --dataset-source-url https://stanfordmlgroup.github.io/competitions/chexpert/ `
-  --intended-population "Chest radiographs matching CheXpert acquisition and labeling"
-```
-
-## Release gate
-
-A checkpoint remains research-only until it has all of the following:
-
-- documented license, provenance, exclusions, and subject-level split;
-- a locked external test set from a different institution or acquisition source;
-- AUROC, sensitivity, specificity, calibration, subgroup, and failure-case reports;
-- a model card defining intended use and known contraindications;
-- clinician review of the human-computer workflow;
-- prospective validation and applicable regulatory review before clinical use.
-
-No research checkpoint may prescribe treatment or replace the original image,
-clinical history, physical examination, laboratory results, or specialist review.
-
-## Completed skin pilot
-
-The first end-to-end pipeline check used all 294 available malignant examples
-and a reproducible negative subset, for 1,000 samples total. It used 850 training
-and 150 validation samples at 64 px because the installed PyTorch build is
-CPU-only. Internal validation produced AUROC 0.893225, sensitivity 0.795455,
-specificity 0.858491, balanced accuracy 0.826973, and ECE 0.126641.
-
-These are development-set results, not external clinical performance. The
-checkpoint remains `research_only` and patient inference is disabled. The full
-217,477-image dataset is stored outside Git at
-`C:\Users\parth\Documents\ProbStrip-datasets\ISIC2024-Permissive`.
+No model score should be interpreted as a guarantee, and negative screens do
+not rule out disease or injury when symptoms remain concerning.

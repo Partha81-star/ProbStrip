@@ -165,17 +165,25 @@ def _diagnosis_section(payload, styles):
         badge_bg = PALE_TEAL
         badge_border = TEAL
 
-    detections = diag.get("detections") or []
+    model_score = diag.get("model_score")
+    if model_score is None and diag.get("detections"):
+        model_score = diag.get("risk_score")
     confidence_text = (
-        f"{diag.get('risk_score', 0)}%"
-        if detections
-        else "No detection above the configured threshold"
+        f"{model_score}%"
+        if model_score is not None
+        else diag.get("score_text", "No detection above the configured threshold")
     )
+    score_label = diag.get("score_label") or "Model confidence"
+    explanation = diag.get("patient_explanation") or {}
+    patient_summary = explanation.get("patient_summary") or diag.get("summary", "")
+    next_steps = explanation.get("next_steps") or diag.get("recommendation", "")
+    urgent_warning = explanation.get("urgent_warning") or ""
     summary_text = (
         f"<b>Detected finding:</b> {_safe(diag.get('primary_condition', ''))}<br/>"
-        f"<b>Model confidence:</b> {_safe(confidence_text)}<br/>"
-        f"{_safe(diag.get('summary', ''))}<br/>"
-        f"<b>Recommended next step:</b> {_safe(diag.get('recommendation', ''))}"
+        f"<b>{_safe(score_label)}:</b> {_safe(confidence_text)}<br/>"
+        f"{_safe(patient_summary)}<br/>"
+        f"<b>Recommended next step:</b> {_safe(next_steps)}"
+        + (f"<br/><b>Urgent warning:</b> {_safe(urgent_warning)}" if urgent_warning else "")
     )
 
     card = Table([[Paragraph(summary_text, styles["BodySmall"])]], colWidths=[170 * mm])
@@ -261,52 +269,13 @@ def _quality_table(checks, styles, general=False):
     return table
 
 
-def _clinician_section(payload, styles):
-    review = payload.get("clinician_review") or {}
-    if review.get("status") != "reviewed":
-        return [
-            Paragraph("Diagnosis", styles["Section"]),
-            Paragraph(
-                "Awaiting confirmation by a qualified healthcare professional.",
-                styles["BodySmall"],
-            ),
-        ]
-    diagnosis_card = Table(
-        [[Paragraph(
-            f"<b>{_safe(review.get('impression') or 'No diagnosis entered.')}</b><br/>"
-            f"<b>Clinical notes:</b> {_safe(review.get('note') or review.get('observations') or 'None entered.')}<br/>"
-            f"<b>Recommended next step:</b> {_safe(review.get('recommendation') or 'Follow local clinical guidance.')}",
-            styles["BodySmall"],
-        )]],
-        colWidths=[170 * mm],
-    )
-    diagnosis_card.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, -1), PALE_TEAL),
-                ("BOX", (0, 0), (-1, -1), 0.8, TEAL),
-                ("LEFTPADDING", (0, 0), (-1, -1), 10),
-                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
-                ("TOPPADDING", (0, 0), (-1, -1), 9),
-                ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
-            ]
-        )
-    )
-    return [
-        Paragraph("Clinician-confirmed diagnosis", styles["Section"]),
-        diagnosis_card,
-        Spacer(1, 2 * mm),
-    ]
-
-
 def retinal_report_as_pdf(payload, original_image=None, result_image=None):
     styles = _styles()
-    review = payload.get("clinician_review") or {}
-    measures = review.get("reviewed_research_measures") or payload["research_measures"]
+    measures = payload["vessel_measures"]
     outcome = payload["review_outcome"]
     english_outcomes = {
-        "ready": "Vessel map ready for clinician review.",
-        "review": "Clinician review is especially important because the model flagged uncertainty.",
+        "ready": "Retinal vessel map completed.",
+        "review": "Some vessel regions were flagged as uncertain.",
         "retake": "A clearer retinal image is needed before vessel mapping.",
     }
     outcome_text = english_outcomes.get(outcome.get("level"), outcome.get("title", "Review required."))
@@ -316,7 +285,6 @@ def retinal_report_as_pdf(payload, original_image=None, result_image=None):
         Paragraph(f"Report reference: {_safe(payload['case_id'])}<br/>Created: {_safe(payload['created_at'])}", styles["Muted"]),
         Spacer(1, 4 * mm),
     ]
-    story.extend(_clinician_section(payload, styles))
     story.extend(_diagnosis_section(payload, styles))
     story.extend([
         Paragraph("Result summary", styles["Section"]),
@@ -400,8 +368,6 @@ def general_report_as_pdf(payload, original_image=None, result_image=None):
     diagnosis_section = _diagnosis_section(payload, styles)
     if diagnosis_section:
         story.extend(diagnosis_section)
-    elif (payload.get("clinician_review") or {}).get("status") == "reviewed":
-        story.extend(_clinician_section(payload, styles))
     else:
         story.extend(
             [

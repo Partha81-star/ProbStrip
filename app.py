@@ -19,6 +19,8 @@ from clinical.analysis import (
     review_outcome,
 )
 from clinical.biomarkers import calculate_vascular_biomarkers, reviewed_mask
+from clinical.chest_detection import detect_pneumonia
+from clinical.patient_explanation import explain_model_result
 from clinical.general_reporting import (
     general_report_as_json,
     make_general_report_payload,
@@ -39,6 +41,7 @@ from clinical.reporting import (
 from data.preprocessing import MedicalImagePreprocessor
 from inference.mc_dropout_inference import StochasticInferenceEngine
 from models.probabilistic_unet import ProbabilisticUNet
+from models.medical_classifier import CompactMedicalClassifier
 
 
 APP_ROOT = Path(__file__).resolve().parent
@@ -47,6 +50,13 @@ DEMO_IMAGE = APP_ROOT / "test_results" / "Image_14L_input.png"
 DEFAULT_CALIBRATION = APP_ROOT / "calibration" / "profile.json"
 FRACTURE_CHECKPOINT = (
     APP_ROOT / "checkpoints" / "fracture" / "yolov8_localization_fractureAtlas.pt"
+)
+PNEUMONIA_CHECKPOINT = (
+    APP_ROOT
+    / "checkpoints"
+    / "classifiers"
+    / "pneumoniamnist_pneumonia"
+    / "latest_model.pth"
 )
 
 st.set_page_config(
@@ -102,26 +112,25 @@ st.markdown(
 
 PATIENT_TEXT = {
     "English": {
-        "no_diagnosis": "AI-assisted retinal vessel assessment",
+        "no_diagnosis": "Retinal vessel screening",
         "no_diagnosis_body": (
             "ProbStrip maps visible blood vessels and marks places where the software "
-            "is unsure. An eye-care professional should interpret this analysis with "
-            "your examination, symptoms, and medical history before making a diagnosis."
+            "is unsure. It does not classify retinal infections or other eye diseases."
         ),
-        "ready": "Vessel map ready for clinician review",
-        "review": "Clinician review is especially important",
+        "ready": "Retinal vessel map completed",
+        "review": "Some vessel regions need closer review",
         "retake": "A clearer retinal image is needed",
         "next": "What to do next",
         "ready_body": (
             "The software produced a vessel map with limited flagged uncertainty. "
-            "Only a qualified clinician can interpret what it means for your health."
+            "This describes the mapped vessels, not a disease diagnosis."
         ),
-        "ready_next": "Discuss the image during your normal eye-care appointment.",
+        "ready_next": "Keep the report with the original retinal image for your next eye assessment.",
         "review_body": (
             "The model was unsure in a noticeable part of the image. Amber areas "
             "show where its vessel map needs closer review."
         ),
-        "review_next": "Share the original image and this report with an eye-care professional.",
+        "review_next": "Arrange an eye assessment if you have symptoms or concerns.",
         "retake_body": (
             "The capture-quality check found issues that can make the vessel map "
             "unreliable. This result should not be interpreted clinically."
@@ -202,6 +211,30 @@ def load_fracture_model(checkpoint_path):
     from ultralytics import YOLO
 
     return YOLO(str(path))
+
+
+@st.cache_resource(show_spinner=False)
+def load_pneumonia_model(checkpoint_path):
+    path = Path(checkpoint_path)
+    if not path.is_file():
+        raise FileNotFoundError(
+            "The pneumonia detection checkpoint is missing. Reinstall the model files."
+        )
+    model = CompactMedicalClassifier(in_channels=1)
+    state_dict = torch.load(path, map_location="cpu", weights_only=True)
+    model.load_state_dict(state_dict, strict=True)
+    model.eval()
+    return model
+
+
+def explanation_api_key():
+    key = os.getenv("GOOGLE_API_KEY") or os.getenv("GEMINI_API_KEY")
+    if key:
+        return key
+    try:
+        return st.secrets.get("GOOGLE_API_KEY") or st.secrets.get("GEMINI_API_KEY")
+    except (FileNotFoundError, KeyError):
+        return None
 
 
 def decode_image(image_bytes: bytes):
@@ -379,6 +412,49 @@ def create_and_store_case(image_bytes, settings, language):
         },
         language=language,
     )
+    if case["prediction"] is None:
+        retinal_result = {
+            "status": "evaluated",
+            "primary_condition": "Retinal image could not be screened",
+            "risk_level": "Moderate",
+            "risk_score": None,
+            "model_score": None,
+            "score_label": "Screening status",
+            "score_text": "New image needed",
+            "summary": "The image did not pass the capture checks needed for vessel mapping.",
+            "recommendation": "Repeat the retinal photograph with the retina centered and in focus.",
+            "differential_diagnoses": [],
+            "population_scope": "Retinal blood-vessel segmentation",
+        }
+    else:
+        retinal_result = {
+            "status": "evaluated",
+            "primary_condition": "Retinal vessel map completed",
+            "risk_level": (
+                "Moderate" if case["outcome"]["level"] == "review" else "Low"
+            ),
+            "risk_score": None,
+            "model_score": None,
+            "score_label": "Screening status",
+            "score_text": "Vessel map completed",
+            "summary": (
+                "Visible retinal vessels were mapped and uncertain regions were highlighted. "
+                "This model does not classify retinal infection or other eye disease."
+            ),
+            "recommendation": (
+                "Use the original image and vessel overlay during an eye assessment, "
+                "especially when vision symptoms are present."
+            ),
+            "differential_diagnoses": [],
+            "population_scope": "Retinal blood-vessel segmentation",
+        }
+    retinal_result["patient_explanation"] = explain_model_result(
+        retinal_result,
+        "Retinal fundus image",
+        api_key=explanation_api_key(),
+    )
+    payload["diagnosis"] = retinal_result
+    payload["diagnosis_message"] = "Retinal vessel screening completed."
     case.update({"case_id": case_id, "payload": payload})
     st.session_state.cases.append(case)
     st.session_state.active_case = len(st.session_state.cases) - 1
@@ -389,9 +465,6 @@ def render_patient_result(case, language):
     text = PATIENT_TEXT[language]
     outcome = case["outcome"]
     display_measures = effective_measures(case)
-    clinician_reviewed = (
-        case["payload"].get("clinician_review", {}).get("status") == "reviewed"
-    )
     translated_title = text.get(outcome["level"], outcome["title"])
     translated_body = text[f'{outcome["level"]}_body']
     translated_next = text[f'{outcome["level"]}_next']
@@ -401,21 +474,6 @@ def render_patient_result(case, language):
             "This result was created with an older image-quality policy. Analyze the "
             "image again to apply the current scoring rules."
         )
-    if clinician_reviewed:
-        st.success(
-            "A qualified clinician marked this report as reviewed. The displayed map "
-            "and measurements include the saved correction; the original AI output "
-            "remains in the technical record."
-        )
-        clinician_review = case["payload"]["clinician_review"]
-        if clinician_review.get("impression"):
-            st.markdown(
-                f"**Clinician impression or diagnosis:** {clinician_review['impression']}"
-            )
-        if clinician_review.get("recommendation"):
-            st.markdown(
-                f"**Clinician-recommended next step:** {clinician_review['recommendation']}"
-            )
     st.markdown(
         f'<div class="result-{outcome["level"]}"><strong>{translated_title}</strong>'
         f'<br>{translated_body}<br><br><strong>{text["next"]}:</strong> '
@@ -427,7 +485,7 @@ def render_patient_result(case, language):
     if case["prediction"] is None:
         status_a, status_b = st.columns(2)
         status_a.metric("Vessel map", "Not created")
-        status_b.metric("Clinical diagnosis", "Awaiting confirmation")
+        status_b.metric("Screening result", "New image needed")
         failed_checks = [
             check.name for check in case["quality"].checks if check.status == "Retake"
         ]
@@ -462,15 +520,22 @@ def render_patient_result(case, language):
         st.markdown(
             f'<div style="{box_style} padding: 14px 18px; border-radius: 8px; margin: 14px 0;">'
             f'<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">'
-            f'<h4 style="margin:0; color:#1E293B;">Diagnostic Assessment: {diagnosis.get("primary_condition")}</h4>'
+            f'<h4 style="margin:0; color:#1E293B;">Screening result: {diagnosis.get("primary_condition")}</h4>'
             f'<span style="background:{tag_color}; color:white; padding:4px 12px; border-radius:12px; font-weight:bold; font-size:0.85rem;">'
-            f'{risk_level.upper()} RISK ({diagnosis.get("risk_score")}%)</span>'
+            f'{diagnosis.get("score_text", "Screening completed")}</span>'
             f'</div>'
             f'<p style="margin: 8px 0 4px 0; color:#334155; font-size:0.95rem;">{diagnosis.get("summary")}</p>'
             f'<p style="margin: 4px 0 0 0; color:#475569; font-size:0.88rem;"><strong>Recommendation:</strong> {diagnosis.get("recommendation")}</p>'
             f'</div>',
             unsafe_allow_html=True,
         )
+        explanation = diagnosis.get("patient_explanation") or {}
+        if explanation:
+            st.markdown("**What this means**")
+            st.write(explanation.get("patient_summary", diagnosis.get("summary", "")))
+            st.markdown("**What to do next**")
+            st.write(explanation.get("next_steps", diagnosis.get("recommendation", "")))
+            st.caption(explanation.get("urgent_warning", ""))
 
     diag_tab, report_tab, image_tab = st.tabs(
         ["Vessel measurements", "What this means", "Your images"]
@@ -519,7 +584,7 @@ def render_patient_result(case, language):
                 caption="Teal: mapped vessels. Amber: areas needing review.",
                 width="stretch",
             )
-    st.subheader("Take this report to your clinician", anchor=False)
+    st.subheader("Download your report", anchor=False)
     st.download_button(
         "Download PDF report",
         retinal_report_as_pdf(
@@ -540,7 +605,7 @@ def analyze_page(settings, language):
     st.header("Review a medical image", anchor=False)
     category = st.selectbox(
         "What kind of image are you reviewing?",
-        ["Retinal fundus image", *MODALITIES.keys()],
+        ["Retinal fundus image", "Bone or joint X-ray", "Chest X-ray"],
         key="review-image-category",
     )
     if category != "Retinal fundus image":
@@ -548,12 +613,12 @@ def analyze_page(settings, language):
         return
 
     st.write(
-        "Upload an image to assess capture quality, map visible retinal vessels, and highlight areas requiring closer review."
+        "Upload a retinal image to map visible blood vessels and highlight uncertain regions."
     )
     st.markdown(
-        '<div class="safety-bar"><strong>AI-assisted retinal assessment.</strong> '
-        "ProbStrip detects visible retinal vessels and highlights uncertain areas to support clinical interpretation. "
-        "A qualified eye-care professional must confirm the diagnosis and treatment plan.</div>",
+        '<div class="safety-bar"><strong>Retinal vessel screening.</strong> '
+        "ProbStrip maps visible retinal vessels and uncertain areas. The current retinal "
+        "model does not classify infection or other eye disease.</div>",
         unsafe_allow_html=True,
     )
 
@@ -564,7 +629,7 @@ def analyze_page(settings, language):
             help="Upload a retinal photograph or medical scan centered and in focus.",
         )
         consent = st.checkbox(
-            "I understand this analysis supports, but does not replace, diagnosis by a qualified eye-care professional."
+            "I understand this is vessel screening and urgent vision symptoms require medical attention."
         )
         submitted = st.form_submit_button(
             "Check image and create report", type="primary", width="stretch"
@@ -578,7 +643,7 @@ def analyze_page(settings, language):
         else:
             try:
                 image_bytes = uploaded.getvalue()
-                with st.spinner("Checking image quality and calculating vessel measurements..."):
+                with st.spinner("Mapping retinal vessels and preparing the report..."):
                     case = create_and_store_case(image_bytes, settings, language)
                 st.success(f"Report created successfully: {case['case_id']}")
             except (FileNotFoundError, RuntimeError, ValueError) as exc:
@@ -609,7 +674,7 @@ def camera_page(settings, language):
             help="This opens the device camera. It is not a substitute for a fundus camera.",
         )
         camera_consent = st.checkbox(
-            "I understand the captured vessel map requires interpretation by a qualified eye-care professional.",
+            "I understand the captured result maps vessels and does not classify eye disease.",
             key="camera-consent",
         )
         analyze_capture = st.button(
@@ -624,7 +689,7 @@ def camera_page(settings, language):
             else:
                 try:
                     with st.spinner(
-                        "Checking capture quality and running uncertainty analysis..."
+                        "Mapping retinal vessels and preparing the report..."
                     ):
                         case = create_and_store_case(
                             camera_image.getvalue(), settings, language
@@ -637,7 +702,7 @@ def camera_page(settings, language):
         st.markdown("**Low-latency positioning preview**")
         st.info(
             "The live overlay uses one smaller model pass for speed and does not calculate "
-            "clinical uncertainty. Teal pixels are the latest vessel estimate. Use the "
+            "the full uncertainty map. Teal pixels are the latest vessel estimate. Use the "
             "photo tab to create a full report."
         )
         live_enabled = st.toggle(
@@ -685,14 +750,18 @@ def camera_page(settings, language):
 
 
 def general_imaging_page(modality):
+    capability = (
+        "fracture localization"
+        if modality == "Bone or joint X-ray"
+        else "pneumonia pattern screening"
+    )
     st.write(
-        "Scan or upload an image to detect supported findings and create a patient-friendly report. "
-        "Bone and joint X-rays include automatic fracture localization."
+        f"Upload or capture an image for automatic {capability} and a patient-friendly report."
     )
     st.markdown(
         '<div class="safety-bar"><strong>Automatic disease screening.</strong> '
-        "The result highlights supported findings and model confidence. A negative result "
-        "cannot exclude an injury when symptoms or trauma history remain concerning.</div>",
+        "The result shows the detected finding, model score, and next steps. A negative "
+        "screen cannot exclude disease when symptoms remain concerning.</div>",
         unsafe_allow_html=True,
     )
 
@@ -764,6 +833,18 @@ def general_imaging_page(modality):
                     )
                     result["overlay"] = fracture_result["overlay"]
                     automated_diagnosis = fracture_result["finding"]
+                elif modality == "Chest X-ray":
+                    pneumonia_result = detect_pneumonia(
+                        original,
+                        load_pneumonia_model(str(PNEUMONIA_CHECKPOINT)),
+                    )
+                    automated_diagnosis = pneumonia_result["finding"]
+                if automated_diagnosis:
+                    automated_diagnosis["patient_explanation"] = explain_model_result(
+                        automated_diagnosis,
+                        modality,
+                        api_key=explanation_api_key(),
+                    )
                 fingerprint = hashlib.sha256(media.getvalue()).hexdigest()[:12]
                 result["payload"] = make_general_report_payload(
                     make_case_id(),
@@ -803,7 +884,11 @@ def general_imaging_page(modality):
         caption=(
             "Red boxes show fracture candidates detected by the model."
             if diag and diag.get("detections")
-            else "Enhanced structure-edge view."
+            else (
+                "Chest screening uses the complete image; the overlay supports visibility."
+                if modality == "Chest X-ray"
+                else "No fracture box exceeded the detection threshold."
+            )
         ),
         width="stretch",
     )
@@ -812,14 +897,20 @@ def general_imaging_page(modality):
         risk_level = diag.get("risk_level", "Low")
         tag_color = "#DC2626" if risk_level == "High" else ("#D97706" if risk_level == "Moderate" else "#059669")
         bg_color = "#FEF2F2" if risk_level == "High" else ("#FFFBEB" if risk_level == "Moderate" else "#ECFDF5")
-        detected = diag.get("primary_condition") == "Fracture pattern detected"
+        detected = not diag.get("primary_condition", "").startswith("No ")
         if not detected:
             tag_color = "#D97706"
             bg_color = "#FFFBEB"
+        model_score = diag.get("model_score")
+        score_label = diag.get("score_label", "Model confidence")
         confidence_badge = (
-            f"MODEL CONFIDENCE {diag.get('risk_score', 0)}%"
-            if detected
-            else "NO DETECTION ABOVE 25%"
+            f"{score_label.upper()} {model_score}%"
+            if model_score is not None
+            else (
+                f"MODEL CONFIDENCE {diag.get('risk_score', 0)}%"
+                if detected
+                else "NO DETECTION ABOVE 25%"
+            )
         )
         st.markdown(
             f'<div style="background-color: {bg_color}; border-left: 5px solid {tag_color}; padding: 14px 18px; border-radius: 10px; margin: 12px 0;">'
@@ -833,23 +924,15 @@ def general_imaging_page(modality):
             f'</div>',
             unsafe_allow_html=True,
         )
-        # ── Differential diagnosis table ─────────────────────────────────────
-        differentials = diag.get("differential_diagnoses", [])
-        if differentials:
-            st.markdown("**Differential Diagnosis — All Evaluated Conditions:**")
-            diff_rows = []
-            for d in differentials:
-                rl = d.get("risk_level", "Low")
-                badge = "🔴" if rl == "High" else ("🟡" if rl == "Moderate" else "🟢")
-                diff_rows.append({
-                    "Condition": d.get("condition", ""),
-                    "Risk Level": f"{badge} {rl}",
-                    "Probability": f"{d.get('probability_percent', 0)}%",
-                    "Supporting Evidence": d.get("evidence", ""),
-                })
-            st.dataframe(pd.DataFrame(diff_rows), hide_index=True, width="stretch")
+        explanation = diag.get("patient_explanation") or {}
+        if explanation:
+            st.markdown("**What this means**")
+            st.write(explanation.get("patient_summary", diag.get("summary", "")))
+            st.markdown("**What to do next**")
+            st.write(explanation.get("next_steps", diag.get("recommendation", "")))
+            st.caption(explanation.get("urgent_warning", ""))
     else:
-        st.info("No disease-specific detection model is configured for this image category yet.")
+        st.error("The screening model could not produce a result for this image.")
     report_id = result["payload"]["case_id"]
     st.subheader("Download report", anchor=False)
     st.download_button(
@@ -966,7 +1049,7 @@ def clinician_page():
     case = st.session_state.cases[labels.index(selected)]
     st.dataframe(quality_table(case["quality"]), hide_index=True, width="stretch")
     st.markdown("**Original AI measurements**")
-    st.json(case["payload"]["research_measures"], expanded=False)
+    st.json(case["payload"]["vessel_measures"], expanded=False)
 
     note_key = f"note-{selected}"
     impression_key = f"impression-{selected}"
@@ -1119,7 +1202,7 @@ def clinician_page():
             "recommendation": st.session_state.get(recommendation_key, "").strip(),
             "reviewed_at": datetime.now(timezone.utc).isoformat(),
             "correction": correction_details if candidate_mask is not None else None,
-            "reviewed_research_measures": (
+            "reviewed_vessel_measures": (
                 candidate_measures if candidate_mask is not None else None
             ),
         }
@@ -1152,17 +1235,15 @@ def safety_page():
     st.header("Safety and privacy", anchor=False)
     st.subheader("What ProbStrip does", anchor=False)
     st.write(
-        "It checks basic capture quality, creates a retinal blood-vessel segmentation, "
-        "and highlights pixels where repeated stochastic model passes disagree. The "
-        "general imaging workspace can enhance contrast and show intensity edges in "
-        "X-rays, CT, MRI, ultrasound, and external photographs."
+        "It maps retinal blood vessels, localizes fracture candidates in supported bone "
+        "X-rays, screens pediatric chest X-rays for a pneumonia pattern, and creates a "
+        "patient-friendly PDF report."
     )
-    st.subheader("What ProbStrip does not do", anchor=False)
+    st.subheader("Important limits", anchor=False)
     st.write(
-        "It does not detect or rule out a disease, fracture, or lesion; prescribe "
-        "treatment; replace a clinical examination; or provide emergency advice. The "
-        "current AI checkpoint is retinal-only, was developed from a small "
-        "dataset, and has not been prospectively validated."
+        "The retinal model maps vessels but does not classify infection. The chest model "
+        "only screens for pneumonia in images similar to its pediatric training data. "
+        "A negative screen cannot rule out disease or injury, and the app does not prescribe medication."
     )
     st.subheader("Privacy in this release", anchor=False)
     st.write(
@@ -1173,12 +1254,6 @@ def safety_page():
     st.write(
         "Use the sidebar control to clear every image and report reference held by the "
         "current browser session. Closing or expiring the session also releases them."
-    )
-    st.subheader("Clinical readiness", anchor=False)
-    st.write(
-        "Clinical use requires representative multi-site evaluation, subgroup analysis, "
-        "calibration and abstention validation, cybersecurity controls, quality management, "
-        "and the regulatory review applicable in the deployment country."
     )
 
 
@@ -1213,15 +1288,13 @@ def main():
     with st.sidebar:
         st.markdown('<div class="brand">ProbStrip</div>', unsafe_allow_html=True)
         st.markdown(
-            '<div class="brand-sub">Medical image review</div>', unsafe_allow_html=True
+            '<div class="brand-sub">Medical image screening</div>', unsafe_allow_html=True
         )
         page = st.radio(
             "Navigation",
             [
                 "Review image",
                 "Camera and live",
-                "Compare visits",
-                "Clinician details",
                 "Safety and privacy",
             ],
             label_visibility="collapsed",
@@ -1274,10 +1347,6 @@ def main():
         analyze_page(settings, language)
     elif page == "Camera and live":
         camera_page(settings, language)
-    elif page == "Compare visits":
-        compare_page()
-    elif page == "Clinician details":
-        clinician_page()
     else:
         safety_page()
 

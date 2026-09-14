@@ -10,9 +10,10 @@ def test_initial_patient_screen_renders_without_exception():
 
     assert not app.exception
     assert app.header[0].value == "Review a medical image"
-    assert "does not replace" in app.checkbox[0].label
-    assert any("AI-assisted retinal assessment" in item.value for item in app.markdown)
+    assert "urgent vision symptoms" in app.checkbox[0].label
+    assert any("Retinal vessel screening" in item.value for item in app.markdown)
     assert "Camera and live" in app.radio[0].options
+    assert "Clinician details" not in app.radio[0].options
 
 
 def test_camera_screen_is_lazy_and_mobile_capture_is_available():
@@ -45,6 +46,26 @@ def test_review_screen_supports_general_imaging_categories():
     assert app.header[0].value == "Review a medical image"
     assert len(app.get("file_uploader")) == 1
     assert any("Automatic disease screening" in item.value for item in app.markdown)
+
+
+def test_review_screen_exposes_trained_chest_path():
+    app_path = Path(__file__).resolve().parents[1] / "app.py"
+    app = AppTest.from_file(app_path, default_timeout=30).run()
+    category = next(
+        selectbox for selectbox in app.selectbox if "Chest X-ray" in selectbox.options
+    )
+
+    assert category.options == [
+        "Retinal fundus image",
+        "Bone or joint X-ray",
+        "Chest X-ray",
+    ]
+
+    category.set_value("Chest X-ray")
+    app.run()
+
+    assert not app.exception
+    assert any("pneumonia pattern screening" in item.value for item in app.markdown)
 
 
 def test_general_imaging_page_does_not_shadow_pandas_import():

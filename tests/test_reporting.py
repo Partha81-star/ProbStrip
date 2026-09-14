@@ -26,19 +26,32 @@ def _payload():
     outcome = {
         "level": "ready",
         "title": "Ready for review",
-        "explanation": "A research explanation.",
-        "next_step": "See a clinician.",
+        "explanation": "The vessel map was completed.",
+        "next_step": "Keep the report with the original image.",
     }
-    return make_report_payload("PS-TEST", quality, measures, outcome, {})
+    payload = make_report_payload("PS-TEST", quality, measures, outcome, {})
+    payload["diagnosis"] = {
+        "status": "evaluated",
+        "primary_condition": "Retinal vessel map completed",
+        "risk_level": "Low",
+        "risk_score": None,
+        "model_score": None,
+        "score_label": "Screening status",
+        "score_text": "Vessel map completed",
+        "summary": "Visible retinal vessels were mapped.",
+        "recommendation": "Keep the result with the original image.",
+    }
+    return payload
 
 
-def test_report_never_claims_a_diagnosis():
+def test_report_contains_retinal_screening_result():
     payload = _payload()
 
-    assert payload["diagnosis"] is None
-    assert "awaiting clinician confirmation" in report_as_html(payload)
+    assert payload["diagnosis"]["primary_condition"] == "Retinal vessel map completed"
+    assert "Retinal vessel map completed" in report_as_html(payload)
     exported = json.loads(report_as_json(payload))
-    assert exported["diagnosis"] is None
+    assert "vessel_measures" in exported
+    assert "research_measures" not in exported
     assert "quality" not in exported
 
 
@@ -48,39 +61,6 @@ def test_fhir_export_is_preliminary_and_ai_assisted():
     assert fhir["resourceType"] == "DiagnosticReport"
     assert fhir["status"] == "preliminary"
     assert "AI-assisted" in fhir["category"][0]["text"]
-
-
-def test_reviewed_measure_is_used_in_clinician_exports():
-    payload = _payload()
-    reviewed = dict(payload["research_measures"])
-    reviewed["visible_vessel_coverage_percent"] = 7.25
-    payload["clinician_review"] = {
-        "status": "reviewed",
-        "note": "Reviewed against source image.",
-        "reviewed_research_measures": reviewed,
-    }
-
-    fhir = json.loads(report_as_fhir(payload))
-    html = report_as_html(payload)
-
-    assert fhir["contained"][0]["valueQuantity"]["value"] == 7.25
-    assert "Clinician review" in html
-
-
-def test_clinician_impression_is_used_in_html_and_fhir_reports():
-    payload = _payload()
-    payload["clinician_review"] = {
-        "status": "reviewed",
-        "impression": "Clinician-entered retinal impression",
-        "recommendation": "Arrange follow-up.",
-        "note": "Reviewed against original image.",
-    }
-
-    fhir = json.loads(report_as_fhir(payload))
-    html = report_as_html(payload)
-
-    assert "Clinician-entered retinal impression" in html
-    assert fhir["conclusion"] == "Clinician-entered retinal impression"
 
 
 def test_patient_pdf_is_valid_and_contains_safety_content():
@@ -93,6 +73,7 @@ def test_patient_pdf_is_valid_and_contains_safety_content():
 
     assert pdf.startswith(b"%PDF-")
     assert len(reader.pages) >= 1
-    assert "Awaiting confirmation" in text.replace("\n", " ")
+    assert "Retinal vessel map completed" in text.replace("\n", " ")
+    assert "research" not in text.lower()
     assert "Image-quality" not in text
     assert "Quality score" not in text

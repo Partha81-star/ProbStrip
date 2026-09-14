@@ -11,22 +11,22 @@ def make_report_payload(
     case_id, quality, measures, outcome, settings, language="English"
 ):
     safety_notice = (
-        "यह शोध प्रोटोटाइप बीमारी का निदान नहीं करता और योग्य स्वास्थ्य पेशेवर "
-        "द्वारा जांच का स्थान नहीं ले सकता।"
+        "यह स्क्रीनिंग परिणाम अंतिम निदान नहीं है। अचानक दृष्टि हानि, तेज आंख दर्द "
+        "या तेजी से बिगड़ते लक्षणों पर तुरंत चिकित्सा सहायता लें।"
         if language == "Hindi"
         else (
-            "This decision support analysis is intended for clinician review and must not replace "
-            "an examination by a qualified healthcare professional."
+            "This screening result is not a final diagnosis. Seek urgent care for sudden "
+            "vision loss, severe eye pain, new flashes, or rapidly worsening symptoms."
         )
     )
     return {
         "case_id": case_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "intended_use": "AI-assisted retinal vessel mapping for clinician interpretation",
+        "intended_use": "AI-assisted retinal vessel screening",
         "diagnosis": None,
-        "diagnosis_message": "Diagnosis status: awaiting clinician confirmation. The AI model provides supporting retinal vessel measurements.",
+        "diagnosis_message": "Retinal vessel screening completed.",
         "quality": quality.to_dict(),
-        "research_measures": measures,
+        "vessel_measures": measures,
         "review_outcome": outcome,
         "model_settings": settings,
         "patient_language": language,
@@ -41,35 +41,22 @@ def report_as_json(payload):
 
 
 def report_as_html(payload):
-    clinician_review = payload.get("clinician_review") or {}
-    measures = (
-        clinician_review.get("reviewed_research_measures")
-        or payload["research_measures"]
-    )
+    measures = payload["vessel_measures"]
     diagnosis = payload.get("diagnosis") or {}
-    review_block = ""
-    if clinician_review.get("status") == "reviewed":
-        note = html.escape(clinician_review.get("note") or "No note provided.")
-        impression = html.escape(
-            clinician_review.get("impression") or "No diagnosis entered."
-        )
-        recommendation = html.escape(
-            clinician_review.get("recommendation") or "Follow local clinical guidance."
-        )
-        review_block = (
-            "<h2>Clinician review</h2><p><strong>Impression or diagnosis:</strong> "
-            f"{impression}</p><p><strong>Notes:</strong> {note}</p><p><strong>"
-            f"Recommended next step:</strong> {recommendation}</p>"
-        )
-
     diag_block = ""
     if diagnosis:
+        explanation = diagnosis.get("patient_explanation") or {}
+        score_text = (
+            f"{diagnosis.get('model_score')}%"
+            if diagnosis.get("model_score") is not None
+            else diagnosis.get("score_text", "Screening completed")
+        )
         diag_block = (
-            "<h2>Diagnostic Risk Assessment</h2>"
-            f"<p><strong>Primary Finding:</strong> {html.escape(diagnosis.get('primary_condition', ''))} "
-            f"({html.escape(diagnosis.get('risk_level', ''))} Risk - {diagnosis.get('risk_score', 0)}%)</p>"
-            f"<p>{html.escape(diagnosis.get('summary', ''))}</p>"
-            f"<p><strong>Recommendation:</strong> {html.escape(diagnosis.get('recommendation', ''))}</p>"
+            "<h2>Screening result</h2>"
+            f"<p><strong>Finding:</strong> {html.escape(diagnosis.get('primary_condition', ''))}</p>"
+            f"<p><strong>{html.escape(diagnosis.get('score_label', 'Status'))}:</strong> {html.escape(score_text)}</p>"
+            f"<p>{html.escape(explanation.get('patient_summary') or diagnosis.get('summary', ''))}</p>"
+            f"<p><strong>Next step:</strong> {html.escape(explanation.get('next_steps') or diagnosis.get('recommendation', ''))}</p>"
         )
 
     rows = "".join(
@@ -88,24 +75,16 @@ def report_as_html(payload):
         "#D97706;padding:12px;margin:1rem 0}}</style></head><body><h1>ProbStrip retinal "
         f"report</h1><p><strong>Reference:</strong> {html.escape(payload['case_id'])}</p>"
         f"<p><strong>Created:</strong> {html.escape(payload['created_at'])}</p><div class='notice'>"
-        f"{html.escape(payload['safety_notice'])}</div>{review_block}{diag_block}"
-        f"<h2>Diagnosis status</h2><p>{html.escape(payload.get('diagnosis_message', 'Awaiting clinician confirmation.'))}</p>"
+        f"{html.escape(payload['safety_notice'])}</div>{diag_block}"
+        f"<h2>Screening status</h2><p>{html.escape(payload.get('diagnosis_message', 'Screening completed.'))}</p>"
         f"<h2>Supporting vessel measurements</h2><table><tr><th>Measure</th><th>Value</th>"
         f"</tr>{rows}</table></body></html>"
     )
 
 
 def report_as_fhir(payload):
-    review = payload.get("clinician_review") or {}
-    measures = review.get("reviewed_research_measures") or payload.get("research_measures", {})
+    measures = payload.get("vessel_measures", {})
     notes = [{"text": payload.get("safety_notice", "")}]
-    if review.get("status") == "reviewed":
-        notes.append(
-            {
-                "text": "Clinician session review: "
-                + (review.get("note") or "No note provided.")
-            }
-        )
     return json.dumps(
         {
             "resourceType": "DiagnosticReport",
@@ -114,7 +93,9 @@ def report_as_fhir(payload):
             "category": [{"text": "AI-assisted retinal image analysis"}],
             "code": {"text": "Retinal vessel mapping and diagnostic risk assessment"},
             "effectiveDateTime": payload.get("created_at", ""),
-            "conclusion": review.get("impression") or payload.get("diagnosis_message", ""),
+            "conclusion": (payload.get("diagnosis") or {}).get(
+                "primary_condition", payload.get("diagnosis_message", "")
+            ),
             "note": notes,
             "result": [{"reference": "#visible-vessel-coverage"}],
             "contained": [

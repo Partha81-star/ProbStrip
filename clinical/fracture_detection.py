@@ -53,6 +53,8 @@ def detect_fractures(image, model, confidence_threshold=0.25):
             "primary_condition": "Fracture pattern detected",
             "risk_level": "High",
             "risk_score": round(confidence * 100, 1),
+            "model_score": round(confidence * 100, 1),
+            "score_label": "Fracture model confidence",
             "summary": f"The model localized {len(detections)} fracture candidate(s) in the X-ray.",
             "recommendation": "Arrange prompt orthopedic or emergency assessment and correlate with the original radiograph and examination.",
             "differential_diagnoses": [],
@@ -65,12 +67,19 @@ def detect_fractures(image, model, confidence_threshold=0.25):
             "primary_condition": "No fracture pattern detected",
             "risk_level": "Low",
             "risk_score": 0.0,
+            "model_score": None,
+            "score_label": "Fracture model confidence",
+            "score_text": "No detection above the 25% threshold",
             "summary": "The model did not localize a fracture candidate above its configured confidence threshold.",
             "recommendation": "A negative model result does not rule out fracture; use clinical assessment when symptoms or injury history remain concerning.",
             "differential_diagnoses": [],
             "detections": [],
             "model": "FracAtlas YOLOv8 localization",
         }
+
+    finding["population_scope"] = (
+        "Hand, leg, hip, and shoulder fracture localization"
+    )
 
     return {"finding": finding, "overlay": overlay}
 

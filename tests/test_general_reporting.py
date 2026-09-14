@@ -36,30 +36,20 @@ def test_general_report_is_created_without_a_configured_model():
     assert "Quality checks" not in report
 
 
-def test_general_report_includes_confirmed_clinician_impression():
-    payload = make_general_report_payload(
-        "PS-TEST", "Chest X-ray", _quality(), 3.1, "abc123"
-    )
-    payload["clinician_review"] = {
-        "status": "reviewed",
-        "impression": "Clinician-entered impression",
-        "observations": "Compared with original image.",
-        "recommendation": "Follow up.",
-        "reviewed_at": "2026-09-11T00:00:00Z",
-    }
-
-    assert "Clinician-entered impression" in general_report_as_html(payload)
-
-
 def test_general_pdf_prioritizes_diagnosis_and_omits_quality_details():
-    payload = make_general_report_payload(
-        "PS-TEST", "Chest X-ray", _quality(), 3.1, "abc123"
-    )
-    payload["clinician_review"] = {
-        "status": "reviewed",
-        "impression": "Clinician-confirmed pneumonia",
-        "recommendation": "Arrange treatment review.",
+    diagnosis = {
+        "status": "evaluated",
+        "primary_condition": "Pneumonia pattern detected",
+        "risk_level": "High",
+        "model_score": 91.2,
+        "score_label": "Pneumonia model score",
+        "summary": "The screening model found a pneumonia pattern.",
+        "recommendation": "Arrange prompt medical assessment.",
     }
+    payload = make_general_report_payload(
+        "PS-TEST", "Chest X-ray", _quality(), 3.1, "abc123",
+        automated_diagnosis=diagnosis,
+    )
     image = np.full((64, 64, 3), 100, dtype=np.uint8)
 
     pdf = general_report_as_pdf(payload, image, image)
@@ -67,9 +57,11 @@ def test_general_pdf_prioritizes_diagnosis_and_omits_quality_details():
         page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages
     )
 
-    assert "Clinician-confirmed pneumonia" in text
+    assert "Pneumonia pattern detected" in text
+    assert "Pneumonia model score: 91.2%" in text
     assert "Image-quality" not in text
     assert "Quality score" not in text
+    assert "Clinician" not in text
 
 
 def test_general_pdf_reports_automated_fracture_confidence():
