@@ -95,6 +95,14 @@ def _page_footer(canvas, document):
 
 def _image(array, max_width=78 * mm, max_height=60 * mm):
     image = np.asarray(array)
+    height, width = image.shape[:2]
+    pixel_scale = min(1.0, 900 / max(height, width))
+    if pixel_scale < 1.0:
+        image = cv2.resize(
+            image,
+            (round(width * pixel_scale), round(height * pixel_scale)),
+            interpolation=cv2.INTER_AREA,
+        )
     if image.ndim == 3:
         encoded_image = cv2.cvtColor(image.astype(np.uint8), cv2.COLOR_RGB2BGR)
     else:
@@ -157,11 +165,17 @@ def _diagnosis_section(payload, styles):
         badge_bg = PALE_TEAL
         badge_border = TEAL
 
+    detections = diag.get("detections") or []
+    confidence_text = (
+        f"{diag.get('risk_score', 0)}%"
+        if detections
+        else "No detection above the configured threshold"
+    )
     summary_text = (
-        f"<b>Primary Diagnostic Pattern:</b> {_safe(diag.get('primary_condition', ''))} "
-        f"(Risk Tier: <b>{_safe(risk_level)}</b> — Score: {diag.get('risk_score', 0)}%)<br/>"
+        f"<b>Detected finding:</b> {_safe(diag.get('primary_condition', ''))}<br/>"
+        f"<b>Model confidence:</b> {_safe(confidence_text)}<br/>"
         f"{_safe(diag.get('summary', ''))}<br/>"
-        f"<b>Clinical Recommendation:</b> {_safe(diag.get('recommendation', ''))}"
+        f"<b>Recommended next step:</b> {_safe(diag.get('recommendation', ''))}"
     )
 
     card = Table([[Paragraph(summary_text, styles["BodySmall"])]], colWidths=[170 * mm])
@@ -180,7 +194,7 @@ def _diagnosis_section(payload, styles):
 
     differentials = diag.get("differential_diagnoses") or []
     items = [
-        Paragraph("Diagnostic Assessment & Disease Staging", styles["Section"]),
+        Paragraph("Detection result", styles["Section"]),
         card,
         Spacer(1, 3 * mm),
     ]
@@ -383,14 +397,27 @@ def general_report_as_pdf(payload, original_image=None, result_image=None):
         Paragraph(f"Report reference: {_safe(payload['case_id'])}<br/>Created: {_safe(payload['created_at'])}", styles["Muted"]),
         Spacer(1, 4 * mm),
     ]
-    story.extend(_clinician_section(payload, styles))
-    story.extend(_diagnosis_section(payload, styles))
+    diagnosis_section = _diagnosis_section(payload, styles)
+    if diagnosis_section:
+        story.extend(diagnosis_section)
+    elif (payload.get("clinician_review") or {}).get("status") == "reviewed":
+        story.extend(_clinician_section(payload, styles))
+    else:
+        story.extend(
+            [
+                Paragraph("Detection result", styles["Section"]),
+                Paragraph(
+                    "No disease-specific detection model was used for this imaging category.",
+                    styles["BodySmall"],
+                ),
+            ]
+        )
 
     original = _image(original_image) if original_image is not None else None
     result = _image(result_image) if result_image is not None else None
     if original is not None and result is not None:
         images = Table(
-            [[original, result], ["Original image", "Enhanced review image"]],
+            [[original, result], ["Original image", "Detected finding overlay"]],
             colWidths=[85 * mm, 85 * mm],
         )
         images.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "CENTER"), ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"), ("FONTSIZE", (0, 1), (-1, 1), 8)]))

@@ -23,6 +23,7 @@ from clinical.general_reporting import (
     general_report_as_json,
     make_general_report_payload,
 )
+from clinical.fracture_detection import detect_fractures
 from clinical.modalities import MODALITIES, analyze_general_image
 from clinical.pdf_reporting import general_report_as_pdf, retinal_report_as_pdf
 from clinical.quality import QUALITY_POLICY_VERSION, assess_image_quality
@@ -44,6 +45,9 @@ APP_ROOT = Path(__file__).resolve().parent
 DEFAULT_CHECKPOINT = APP_ROOT / "checkpoints" / "latest_model.pth"
 DEMO_IMAGE = APP_ROOT / "test_results" / "Image_14L_input.png"
 DEFAULT_CALIBRATION = APP_ROOT / "calibration" / "profile.json"
+FRACTURE_CHECKPOINT = (
+    APP_ROOT / "checkpoints" / "fracture" / "yolov8_localization_fractureAtlas.pt"
+)
 
 st.set_page_config(
     page_title="ProbStrip Retinal Review",
@@ -185,6 +189,19 @@ def get_live_processor(checkpoint_path, device, decision_threshold):
         process_every=2,
         input_size=128,
     )
+
+
+@st.cache_resource(show_spinner=False)
+def load_fracture_model(checkpoint_path):
+    path = Path(checkpoint_path)
+    if not path.is_file():
+        raise FileNotFoundError(
+            "The fracture detection checkpoint is missing. Reinstall the model files."
+        )
+    os.environ.setdefault("YOLO_CONFIG_DIR", str(APP_ROOT / ".ultralytics"))
+    from ultralytics import YOLO
+
+    return YOLO(str(path))
 
 
 def decode_image(image_bytes: bytes):
@@ -669,14 +686,13 @@ def camera_page(settings, language):
 
 def general_imaging_page(modality):
     st.write(
-        "Scan or upload the image to improve visibility, review its technical quality, "
-        "and create a report. "
-        "This workspace does not detect fractures, tumors, infections, or other disease."
+        "Scan or upload an image to detect supported findings and create a patient-friendly report. "
+        "Bone and joint X-rays include automatic fracture localization."
     )
     st.markdown(
-        '<div class="safety-bar"><strong>Diagnosis and clinical findings.</strong> '
-        "After reviewing the original image and the AI-assisted views, a qualified "
-        "clinician can record the diagnosis and recommended next step in the report below.</div>",
+        '<div class="safety-bar"><strong>Automatic disease screening.</strong> '
+        "The result highlights supported findings and model confidence. A negative result "
+        "cannot exclude an injury when symptoms or trauma history remain concerning.</div>",
         unsafe_allow_html=True,
     )
 
@@ -717,11 +733,11 @@ def general_imaging_page(modality):
         )
 
     consent = st.checkbox(
-        "I understand these are image-review aids and not a medical diagnosis.",
+        "I understand model confidence is not a guarantee and urgent symptoms require medical attention.",
         key="general-imaging-consent",
     )
     process = st.button(
-        "Create image review",
+        "Detect findings and create report",
         type="primary",
         width="stretch",
         disabled=media is None,
@@ -740,6 +756,14 @@ def general_imaging_page(modality):
                     invert=invert,
                 )
                 result["original"] = original
+                automated_diagnosis = None
+                if modality == "Bone or joint X-ray":
+                    fracture_result = detect_fractures(
+                        original,
+                        load_fracture_model(str(FRACTURE_CHECKPOINT)),
+                    )
+                    result["overlay"] = fracture_result["overlay"]
+                    automated_diagnosis = fracture_result["finding"]
                 fingerprint = hashlib.sha256(media.getvalue()).hexdigest()[:12]
                 result["payload"] = make_general_report_payload(
                     make_case_id(),
@@ -748,12 +772,13 @@ def general_imaging_page(modality):
                     result["edge_area_percent"],
                     fingerprint,
                     image=original,
+                    automated_diagnosis=automated_diagnosis,
                 )
                 st.session_state.general_image_review = result
                 st.success(
                     f"Report created successfully: {result['payload']['case_id']}"
                 )
-            except ValueError as exc:
+            except (FileNotFoundError, RuntimeError, ValueError) as exc:
                 st.error(str(exc))
 
     result = st.session_state.get("general_image_review")
@@ -763,19 +788,8 @@ def general_imaging_page(modality):
         st.info("Create a new review to apply the selected imaging type.")
         return
 
-    quality = result["quality"]
     st.subheader(f"{result['modality']} review", anchor=False)
-    clinician_review = result["payload"].get("clinician_review") or {}
-    if clinician_review.get("status") == "reviewed":
-        st.success(
-            f"Clinician-confirmed diagnosis: {clinician_review.get('impression', 'Recorded')}"
-        )
-        if clinician_review.get("recommendation"):
-            st.markdown(
-                f"**Recommended next step:** {clinician_review['recommendation']}"
-            )
-    else:
-        st.warning("Diagnosis status: awaiting confirmation by a qualified clinician.")
+    diag = result["payload"].get("automated_diagnosis")
     original_col, enhanced_col = st.columns(2)
     original_col.image(result["original"], caption="Original image", width="stretch")
     enhanced_col.image(
@@ -786,21 +800,33 @@ def general_imaging_page(modality):
     )
     st.image(
         result["overlay"],
-        caption="Teal marks visible intensity edges. It does not mark fractures or disease.",
+        caption=(
+            "Red boxes show fracture candidates detected by the model."
+            if diag and diag.get("detections")
+            else "Enhanced structure-edge view."
+        ),
         width="stretch",
     )
-    st.subheader("Technical review and clinician notes", anchor=False)
-    diag = result["payload"].get("automated_diagnosis")
+    st.subheader("Detection and diagnosis", anchor=False)
     if diag and diag.get("status") == "evaluated":
         risk_level = diag.get("risk_level", "Low")
         tag_color = "#DC2626" if risk_level == "High" else ("#D97706" if risk_level == "Moderate" else "#059669")
         bg_color = "#FEF2F2" if risk_level == "High" else ("#FFFBEB" if risk_level == "Moderate" else "#ECFDF5")
+        detected = diag.get("primary_condition") == "Fracture pattern detected"
+        if not detected:
+            tag_color = "#D97706"
+            bg_color = "#FFFBEB"
+        confidence_badge = (
+            f"MODEL CONFIDENCE {diag.get('risk_score', 0)}%"
+            if detected
+            else "NO DETECTION ABOVE 25%"
+        )
         st.markdown(
             f'<div style="background-color: {bg_color}; border-left: 5px solid {tag_color}; padding: 14px 18px; border-radius: 10px; margin: 12px 0;">'
             f'<div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:8px;">'
-            f'<h4 style="margin:0; color:#1E293B; font-size:1rem;">🔍 Primary Finding: {diag.get("primary_condition")}</h4>'
+            f'<h4 style="margin:0; color:#1E293B; font-size:1rem;">Detected finding: {diag.get("primary_condition")}</h4>'
             f'<span style="background:{tag_color}; color:white; padding:4px 12px; border-radius:12px; font-weight:bold; font-size:0.8rem;">'
-            f'{risk_level.upper()} RISK · {diag.get("risk_score")}%</span>'
+            f'{confidence_badge}</span>'
             f'</div>'
             f'<p style="margin: 8px 0 4px 0; color:#334155; font-size:0.9rem;">{diag.get("summary")}</p>'
             f'<p style="margin: 2px 0 0 0; color:#475569; font-size:0.85rem;"><strong>Recommendation:</strong> {diag.get("recommendation")}</p>'
@@ -822,49 +848,9 @@ def general_imaging_page(modality):
                     "Supporting Evidence": d.get("evidence", ""),
                 })
             st.dataframe(pd.DataFrame(diff_rows), hide_index=True, width="stretch")
-    st.info(
-        "Use the fields below to add the clinician-confirmed diagnosis and recommended "
-        "next step. The report will identify it as a clinician assessment."
-    )
+    else:
+        st.info("No disease-specific detection model is configured for this image category yet.")
     report_id = result["payload"]["case_id"]
-    observations = st.text_area(
-        "Clinician observations",
-        key=f"general-observations-{report_id}",
-        placeholder="Describe relevant image findings and limitations.",
-    )
-    impression = st.text_input(
-        "Clinician-confirmed diagnosis",
-        key=f"general-impression-{report_id}",
-        placeholder="To be completed by a qualified healthcare professional.",
-    )
-    recommendation = st.text_area(
-        "Recommended next step",
-        key=f"general-recommendation-{report_id}",
-        placeholder="Document follow-up, additional imaging, or referral.",
-    )
-    clinician_confirmed = st.checkbox(
-        "I am a qualified healthcare professional and I reviewed the original image.",
-        key=f"general-confirmed-{report_id}",
-    )
-    if st.button(
-        "Add diagnosis and assessment to report",
-        width="stretch",
-        key=f"general-save-{report_id}",
-    ):
-        if not clinician_confirmed:
-            st.warning("Qualified-clinician confirmation is required.")
-        elif not impression.strip():
-            st.warning("Enter a clinical impression or diagnosis before saving.")
-        else:
-            result["payload"]["clinician_review"] = {
-                "status": "reviewed",
-                "observations": observations.strip(),
-                "impression": impression.strip(),
-                "recommendation": recommendation.strip(),
-                "reviewed_at": datetime.now(timezone.utc).isoformat(),
-            }
-            st.success("Clinician assessment added to this session report.")
-
     st.subheader("Download report", anchor=False)
     st.download_button(
         "Download PDF report",

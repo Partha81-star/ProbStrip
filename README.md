@@ -1,14 +1,13 @@
 # ProbStrip
 
-ProbStrip is a research medical-image review application. Its retinal workflow combines a
-StripConv U-Net with Monte Carlo dropout to create a vessel map and highlight
-areas where repeated model passes disagree.
+ProbStrip is a patient-friendly medical-image screening application. Its retinal
+workflow combines a StripConv U-Net with Monte Carlo dropout to create a vessel
+map and highlight areas where repeated model passes disagree.
 
-The same Review image screen includes a non-AI workflow for bone and chest
-X-rays, CT, MRI, ultrasound, and external photographs. It provides technical
-quality feedback, contrast enhancement, structure-edge views, and downloadable
-patient and clinical reports. A qualified clinician can record an impression
-in the report. It does not reuse the retinal model or invent a diagnosis.
+The bone and joint X-ray workflow runs a FracAtlas YOLOv8 model, localizes
+fracture candidates, displays model confidence, and produces a downloadable PDF.
+Other image categories remain available for display enhancement, but do not show
+disease findings unless a task-specific checkpoint has been validated and wired in.
 
 The public interface is designed for patients and clinicians to review the same
 result at different levels of detail. It deliberately does **not** generate a
@@ -18,17 +17,16 @@ medical diagnosis.
 
 1. Select retinal, X-ray, CT, MRI, ultrasound, or external imaging on **Review image**.
 2. Upload an image, capture one with the device camera, or use the retinal demonstration.
-3. Check modality-appropriate technical image quality.
+3. Run the internal capture checks needed before model inference.
 4. For retinal images, produce a teal vessel overlay and mark uncertain areas in amber.
-5. For other images, create contrast-enhanced and structure-edge review views.
-6. Explain the result in patient-friendly language.
-7. Download a printable PDF with the reviewed images and quality details, an
+5. For bone and joint X-rays, localize fracture candidates with red boxes.
+6. Explain the detected finding and model confidence in patient-friendly language.
+7. Download a printable PDF with the detected result and reviewed images, an
    HTML report, technical JSON, or preliminary FHIR-shaped JSON.
 8. Compare retinal research measurements from two usable images in the current session.
 9. Capture a still image on a phone or preview a live retinal overlay with WebRTC.
 10. Refine or replace a vessel mask in the clinician review workspace.
-11. Add a qualified-clinician impression to a general-imaging report.
-12. Register two retinal visits before showing a guarded vessel-map change view.
+11. Register two retinal visits before showing a guarded vessel-map change view.
 
 ## Safety and intended use
 
@@ -53,9 +51,12 @@ python -m pip install -r requirements.txt
 streamlit run app.py
 ```
 
-The default checkpoint is `checkpoints/latest_model.pth`. Override it with the
+The default retinal checkpoint is `checkpoints/latest_model.pth`. Override it with the
 `PROBSTRIP_CHECKPOINT` environment variable. The application fails visibly and
 does not return a prediction if the checkpoint cannot be loaded.
+
+The fracture-localization checkpoint is
+`checkpoints/fracture/yolov8_localization_fractureAtlas.pt`.
 
 ### Camera modes
 
@@ -101,6 +102,20 @@ This does not make the model clinically calibrated or authorize diagnosis or
 treatment. Use an independent, locked, patient-level test set and
 clinician-reviewed labels before any prospective study.
 
+### FracAtlas fracture localization
+
+Keep the extracted FracAtlas dataset outside Git, prepare deterministic
+image-level splits, then train and evaluate the lightweight detector:
+
+```powershell
+python prepare_fracatlas.py "C:\path\to\FracAtlas" "C:\path\to\FracAtlas-yolo"
+python train_fracatlas.py "C:\path\to\FracAtlas-yolo\dataset.yaml" --epochs 50
+```
+
+The training command stores the best checkpoint and a JSON test-metrics report
+under `checkpoints/fracture/`. FracAtlas does not provide patient identifiers, so
+these splits cannot establish patient-independent or external performance.
+
 ## Free deployment on Streamlit Community Cloud
 
 1. Sign in at <https://share.streamlit.io> using the GitHub account that owns
@@ -118,6 +133,7 @@ in offline scripts and is intentionally absent from the public interface.
 ```text
 app.py                         Patient and clinician Streamlit experience
 clinical/modalities.py         Multi-modality quality and structure views
+clinical/fracture_detection.py FracAtlas fracture inference and box overlays
 clinical/quality.py            Acquisition-quality gate
 clinical/analysis.py           Visuals, research measurements, review outcome
 clinical/reporting.py          HTML, JSON, and preliminary FHIR exports
@@ -130,6 +146,8 @@ models/                        Probabilistic StripConv U-Net
 inference/                     Monte Carlo dropout inference
 training/                      Offline training utilities
 evaluate_dataset.py            External evaluation and calibration profile CLI
+prepare_fracatlas.py           Deterministic FracAtlas YOLO split builder
+train_fracatlas.py             FracAtlas detector training and holdout evaluation
 tests/                         Safety and report behavior tests
 ```
 

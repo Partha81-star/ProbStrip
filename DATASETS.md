@@ -9,7 +9,7 @@ the repository. Dataset access terms and required attribution must be preserved.
 | App category | Defined research task | Dataset | Access status |
 | --- | --- | --- | --- |
 | Retinal fundus | Vessel segmentation | CHASE_DB1-style local set | Trained locally; provenance remains limited |
-| Bone or joint X-ray | Study-level normal/abnormal classification | MURA | Stanford AIMI account approval required |
+| Bone or joint X-ray | Fracture localization | FracAtlas v7 | Downloaded, trained checkpoint integrated |
 | Chest X-ray | Multi-label radiographic finding classification | CheXpert | Stanford AIMI account approval required |
 | CT | Thoracic lung-nodule detection/segmentation | LIDC-IDRI | Open, CC BY 3.0, approximately 133 GB |
 | MRI | Not selected | Not selected | Body region and clinical task required |
@@ -19,6 +19,7 @@ the repository. Dataset access terms and required attribution must be preserved.
 ## Official sources
 
 - MURA: <https://stanfordmlgroup.github.io/competitions/mura/>
+- FracAtlas: <https://doi.org/10.6084/m9.figshare.22363012>
 - CheXpert: <https://stanfordmlgroup.github.io/competitions/chexpert/>
 - PneumoniaMNIST: <https://zenodo.org/records/10519652>
 - LIDC-IDRI: <https://www.cancerimagingarchive.net/collection/lidc-idri/>
@@ -43,6 +44,22 @@ python train_classifier.py `
 
 The exact extracted image directory can differ by archive release. Confirm it
 before training. Use a capped pilot run before a full run on local hardware.
+
+## FracAtlas preparation and training
+
+The FracAtlas v7 archive is approximately 323 MB compressed. Keep it outside
+Git, then create deterministic image-level train, validation, and test splits:
+
+```powershell
+python prepare_fracatlas.py "C:\path\to\FracAtlas" "C:\path\to\FracAtlas-yolo"
+python train_fracatlas.py "C:\path\to\FracAtlas-yolo\dataset.yaml" `
+  --epochs 50 --batch 8 --image-size 416
+```
+
+The preparation script uses `dataset.csv` as the authoritative class mapping,
+including two byte-identical images duplicated between source class folders.
+FracAtlas has no patient identifiers, so this is an image-level split and not a
+patient-independent or external clinical test.
 
 ## Stanford dataset preparation
 

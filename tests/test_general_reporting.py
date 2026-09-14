@@ -21,17 +21,17 @@ def _quality():
     }
 
 
-def test_general_report_is_created_without_claiming_diagnosis():
+def test_general_report_is_created_without_a_configured_model():
     payload = make_general_report_payload(
         "PS-TEST", "Bone or joint X-ray", _quality(), 4.2, "abc123"
     )
 
     report = general_report_as_html(payload)
 
-    assert payload["report_status"] == "clinical report awaiting clinician confirmation"
+    assert payload["report_status"] == "automated screening report"
     assert payload["automated_diagnosis"] is None
-    assert "awaiting clinician confirmation" in payload["diagnosis_message"]
-    assert "Awaiting confirmation" in report
+    assert "No disease-specific model" in payload["diagnosis_message"]
+    assert "No disease-specific detection model" in report
     assert "technical_quality" not in general_report_as_json(payload)
     assert "Quality checks" not in report
 
@@ -70,3 +70,33 @@ def test_general_pdf_prioritizes_diagnosis_and_omits_quality_details():
     assert "Clinician-confirmed pneumonia" in text
     assert "Image-quality" not in text
     assert "Quality score" not in text
+
+
+def test_general_pdf_reports_automated_fracture_confidence():
+    diagnosis = {
+        "status": "evaluated",
+        "primary_condition": "Fracture pattern detected",
+        "risk_level": "High",
+        "risk_score": 82.4,
+        "summary": "The model localized one fracture candidate.",
+        "recommendation": "Arrange prompt orthopedic assessment.",
+        "detections": [{"box": [2, 3, 20, 22], "confidence": 0.824}],
+    }
+    payload = make_general_report_payload(
+        "PS-FRACTURE",
+        "Bone or joint X-ray",
+        _quality(),
+        2.5,
+        "abc123",
+        automated_diagnosis=diagnosis,
+    )
+    image = np.full((64, 64, 3), 100, dtype=np.uint8)
+
+    pdf = general_report_as_pdf(payload, image, image)
+    text = "\n".join(
+        page.extract_text() or "" for page in PdfReader(BytesIO(pdf)).pages
+    )
+
+    assert "Fracture pattern detected" in text
+    assert "Model confidence: 82.4%" in text
+    assert "Awaiting confirmation" not in text

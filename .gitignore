@@ -42,3 +42,4 @@ evaluation_results/
 /datasets/
 /training_runs/
 .streamlit/secrets.toml
+.ultralytics/
