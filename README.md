@@ -85,7 +85,8 @@ mask names such as `Image_01L_1stHO.png` are discovered automatically. Training
 uses inferred subject groups so paired eyes are not split across training and
 validation. The training command records a reproducible dataset manifest, seed,
 preprocessing, augmentation, optimizer, and model-selection rule in checkpoint
-metadata. It writes `best_model.pth` and restores that model for `latest_model.pth`.
+metadata. Training may create `best_model.pth` locally and restores that model as
+`latest_model.pth`. Only `latest_model.pth` is retained as a deployment artifact.
 
 ```powershell
 python run_dataset.py C:\path\to\dataset --epochs 50 --patience 8 --dataset-name CHASE_DB1

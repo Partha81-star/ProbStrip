@@ -31,6 +31,14 @@ wheels/
 htmlcov/
 evaluation_results/
 /output/pdf/
+/outputs/
+/outputs_real_dataset/
+/test_results/*_ground_truth.png
+/test_results/*_low_confidence_flagged.png
+/test_results/*_pred.png
+/test_results/*_uncertainty.png
+/checkpoints/best_model.pth
+/checkpoints/**/best_model.pth
 /datasets/
 /training_runs/
 .streamlit/secrets.toml
