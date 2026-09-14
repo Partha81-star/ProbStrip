@@ -39,6 +39,11 @@ MODEL_TASKS = {
         "task": "Skin-lesion malignancy research classification",
         "dataset": "ISIC 2024 Permissive",
     },
+    "Blood cell microscopy": {
+        "task_id": "bccd_blood_cell",
+        "task": "Peripheral blood smear cell differential and morphological pathology screening",
+        "dataset": "BCCD / Kaggle Blood Cell Count Dataset",
+    },
 }
 
 

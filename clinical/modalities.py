@@ -23,6 +23,14 @@ MODALITIES = {
         "view": "Dermatological lesion border view",
         "guidance": "Provide an in-focus dermoscopic or macro photograph centered on the skin lesion with uniform lighting.",
     },
+    "Blood cell microscopy": {
+        "short": "blood smear image",
+        "view": "Peripheral blood smear cell map view",
+        "guidance": (
+            "Upload a peripheral blood smear (PBS) microscopy image — bright-field or Giemsa/Wright-stained. "
+            "Ensure the image is in focus, well-lit, and at ×40 or ×100 magnification for best cell detection."
+        ),
+    },
 }
 
 

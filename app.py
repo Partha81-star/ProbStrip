@@ -22,6 +22,7 @@ from clinical.biomarkers import calculate_vascular_biomarkers, reviewed_mask
 from clinical.chest_detection import detect_pneumonia
 from clinical.breast_ultrasound import detect_breast_ultrasound
 from clinical.skin_detection import detect_skin_lesion
+from clinical.blood_cell_detection import detect_blood_cells
 from clinical.patient_explanation import explain_model_result
 from clinical.general_reporting import (
     general_report_as_json,
@@ -613,6 +614,7 @@ def analyze_page(settings, language):
             "Chest X-ray",
             "Breast ultrasound",
             "Skin or external photo",
+            "Blood cell microscopy",
         ],
         key="review-image-category",
     )
@@ -766,6 +768,8 @@ def general_imaging_page(modality):
         capability = "breast lesion segmentation and pattern screening"
     elif modality == "Skin or external photo":
         capability = "skin lesion screening and border assessment"
+    elif modality == "Blood cell microscopy":
+        capability = "peripheral blood smear differential count and morphological pathology screening"
     else:
         capability = "structural feature review"
     st.write(
@@ -860,6 +864,11 @@ def general_imaging_page(modality):
                     skin_result = detect_skin_lesion(original)
                     result["overlay"] = skin_result["overlay"]
                     automated_diagnosis = skin_result["finding"]
+                elif modality == "Blood cell microscopy":
+                    blood_result = detect_blood_cells(original)
+                    result["overlay"] = blood_result["overlay"]
+                    result["blood_detail"] = blood_result
+                    automated_diagnosis = blood_result["finding"]
                 if automated_diagnosis:
                     automated_diagnosis["patient_explanation"] = explain_model_result(
                         automated_diagnosis,
@@ -920,6 +929,15 @@ def general_imaging_page(modality):
             if diag and diag.get("detections")
             else "No focal pigmented lesion segmented."
         )
+    elif modality == "Blood cell microscopy":
+        counts = (diag or {}).get("cell_counts", {})
+        n_total = counts.get("total_cells_detected", 0)
+        overlay_caption = (
+            f"Cell map: {counts.get('rbc_in_frame', 0)} RBCs · "
+            f"{counts.get('wbc_in_frame', 0)} WBCs · "
+            f"{counts.get('platelet_in_frame', 0)} platelets detected. "
+            "Red=RBC, Blue=Lymphocyte, Light-blue=Neutrophil, Orange=Monocyte, Magenta=Blast, Green=Platelet."
+        ) if n_total > 0 else "No cells detected above threshold — check image focus and magnification."
     else:
         overlay_caption = "Structure-edge and feature overlay."
 
@@ -984,7 +1002,59 @@ def general_imaging_page(modality):
             st.dataframe(diff_df, hide_index=True, width="stretch")
     else:
         st.error("The screening model could not produce a result for this image.")
+
+    # ── Blood cell microscopy detailed breakdown ──────────────────────────────
+    if result.get("modality") == "Blood cell microscopy" and diag and diag.get("status") == "evaluated":
+        st.subheader("Blood smear detailed analysis", anchor=False)
+        rbc_a  = diag.get("rbc_analysis", {})
+        wbc_a  = diag.get("wbc_analysis", {})
+        plt_a  = diag.get("platelet_analysis", {})
+        counts = diag.get("cell_counts", {})
+
+        bc1, bc2, bc3 = st.columns(3)
+        bc1.metric("RBCs in frame",     counts.get("rbc_in_frame", 0))
+        bc2.metric("WBCs in frame",     counts.get("wbc_in_frame", 0))
+        bc3.metric("Platelets in frame", counts.get("platelet_in_frame", 0))
+
+        with st.expander("RBC morphology", expanded=True):
+            rbc_flags = rbc_a.get("flags", [])
+            for flag in rbc_flags:
+                icon = "🔴" if "within normal" not in flag and "Insufficient" not in flag else "🟢"
+                st.write(f"{icon} {flag}")
+            if rbc_a.get("mean_area") is not None:
+                st.caption(
+                    f"Mean RBC area: {rbc_a['mean_area']} px² · "
+                    f"Circularity: {rbc_a['mean_circularity']} · "
+                    f"Mean intensity: {rbc_a['mean_intensity']}"
+                )
+
+        with st.expander("WBC differential estimate", expanded=True):
+            diff = wbc_a.get("differential", {})
+            if diff:
+                diff_rows = [{"Cell type": k.title(), "Est. % in frame": f"{v:.0f}%"}
+                             for k, v in sorted(diff.items(), key=lambda x: -x[1])]
+                st.dataframe(pd.DataFrame(diff_rows), hide_index=True, use_container_width=True)
+            wbc_flags = wbc_a.get("flags", [])
+            for flag in wbc_flags:
+                icon = "🔴" if "BLAST" in flag else ("⚠️" if "expected range" not in flag else "🟢")
+                st.write(f"{icon} {flag}")
+
+        with st.expander("Platelet density", expanded=False):
+            plt_flag = plt_a.get("flag", "")
+            icon = "🔴" if "Thrombocytopenia" in plt_flag else ("⚠️" if "Thrombocytosis" in plt_flag else "🟢")
+            st.write(f"{icon} {plt_flag}")
+            if plt_a.get("platelet_rbc_ratio") is not None:
+                st.caption(f"Platelet-to-RBC ratio: {plt_a['platelet_rbc_ratio']:.2f} (normal ≈ 0.08–0.30)")
+
+        blast_detected = wbc_a.get("blast_detected", False)
+        if blast_detected:
+            st.error(
+                "⚠️ BLAST CELLS DETECTED — This finding requires urgent haematology review. "
+                "Do not delay clinical assessment based on this research screen alone."
+            )
+
     report_id = result["payload"]["case_id"]
+
     st.subheader("Download report", anchor=False)
     st.download_button(
         "Download PDF report",
