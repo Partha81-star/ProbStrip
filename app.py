@@ -169,10 +169,32 @@ PATIENT_TEXT = {
 }
 
 
+def ensure_checkpoint_file(checkpoint_path) -> Path:
+    """Ensure that the model weights exist and are not an un-pulled Git LFS pointer."""
+    path = Path(checkpoint_path)
+    if path.is_file() and path.stat().st_size > 1024:
+        return path
+
+    try:
+        rel_path = path.relative_to(APP_ROOT).as_posix()
+    except ValueError:
+        return path
+
+    url = f"https://media.githubusercontent.com/media/Partha81-star/ProbStrip/main/{rel_path}"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        import urllib.request
+        with st.spinner(f"Downloading model weights ({path.name})..."):
+            urllib.request.urlretrieve(url, str(path))
+    except Exception:
+        pass
+    return path
+
+
 @st.cache_resource(show_spinner=False)
 def load_model(checkpoint_path: str, device: str, variant="report"):
-    path = Path(checkpoint_path)
-    if not path.is_file():
+    path = ensure_checkpoint_file(checkpoint_path)
+    if not path.is_file() or path.stat().st_size <= 1024:
         raise FileNotFoundError(
             f"The trained model was not found at {path}. No prediction was made."
         )
@@ -205,8 +227,8 @@ def get_live_processor(checkpoint_path, device, decision_threshold):
 
 @st.cache_resource(show_spinner=False)
 def load_fracture_model(checkpoint_path):
-    path = Path(checkpoint_path)
-    if not path.is_file():
+    path = ensure_checkpoint_file(checkpoint_path)
+    if not path.is_file() or path.stat().st_size <= 1024:
         raise FileNotFoundError(
             "The fracture detection checkpoint is missing. Reinstall the model files."
         )
@@ -218,8 +240,8 @@ def load_fracture_model(checkpoint_path):
 
 @st.cache_resource(show_spinner=False)
 def load_pneumonia_model(checkpoint_path):
-    path = Path(checkpoint_path)
-    if not path.is_file():
+    path = ensure_checkpoint_file(checkpoint_path)
+    if not path.is_file() or path.stat().st_size <= 1024:
         raise FileNotFoundError(
             "The pneumonia detection checkpoint is missing. Reinstall the model files."
         )
