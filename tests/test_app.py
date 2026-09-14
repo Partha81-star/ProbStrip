@@ -1,4 +1,5 @@
 from pathlib import Path
+import ast
 
 from streamlit.testing.v1 import AppTest
 
@@ -42,3 +43,22 @@ def test_review_screen_supports_general_imaging_categories():
     assert not app.exception
     assert app.header[0].value == "Review a medical image"
     assert len(app.get("file_uploader")) == 1
+
+
+def test_general_imaging_page_does_not_shadow_pandas_import():
+    app_path = Path(__file__).resolve().parents[1] / "app.py"
+    module = ast.parse(app_path.read_text(encoding="utf-8"))
+    function = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "general_imaging_page"
+    )
+
+    local_pandas_imports = [
+        alias
+        for node in ast.walk(function)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+        if alias.name == "pandas"
+    ]
+    assert not local_pandas_imports

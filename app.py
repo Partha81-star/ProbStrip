@@ -819,7 +819,6 @@ def general_imaging_page(modality):
                     "Probability": f"{d.get('probability_percent', 0)}%",
                     "Supporting Evidence": d.get("evidence", ""),
                 })
-            import pandas as pd
             st.dataframe(pd.DataFrame(diff_rows), hide_index=True, width="stretch")
     st.info("This workspace does not diagnose disease or recommend treatment. A qualified clinician may document an independent impression after reviewing the original image.")
     report_id = result["payload"]["case_id"]
