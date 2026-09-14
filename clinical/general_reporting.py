@@ -19,10 +19,10 @@ def make_general_report_payload(case_id, modality, quality, edge_area, fingerpri
         "created_at": datetime.now(timezone.utc).isoformat(),
         "imaging_type": modality,
         "image_fingerprint": fingerprint,
-        "report_status": "technical image review generated",
+        "report_status": "clinical report awaiting clinician confirmation",
         "automated_diagnosis": None,
-        "diagnosis_message": "No automated diagnosis was generated. This workflow provides technical image review only.",
-        "analysis_scope": "Technical quality, contrast, and visible edge review only.",
+        "diagnosis_message": "Diagnosis status: awaiting clinician confirmation.",
+        "analysis_scope": "AI-assisted image views with clinician-documented diagnosis.",
         "technical_quality": quality,
         "visible_edge_area_percent": edge_area,
         "technical_observations": observations,
@@ -36,32 +36,19 @@ def make_general_report_payload(case_id, modality, quality, edge_area, fingerpri
 
 
 def general_report_as_json(payload):
-    return json.dumps(payload, indent=2)
+    exported = dict(payload)
+    exported.pop("technical_quality", None)
+    return json.dumps(exported, indent=2)
 
 
 def general_report_as_html(payload):
-    quality = payload["technical_quality"]
-    checks = "".join(
-        "<tr><td>{}</td><td>{:.1f} {}</td><td>{}</td></tr>".format(
-            html.escape(check["name"]),
-            check["value"],
-            html.escape(check["unit"]),
-            "Pass" if check["ok"] else "Review",
-        )
-        for check in quality["checks"]
-    )
-    observations = "".join(
-        f"<li>{html.escape(item)}</li>" for item in payload["technical_observations"]
-    )
     clinician = payload.get("clinician_review") or {}
-    review_html = ""
+    review_html = "<h2>Diagnosis</h2><p>Awaiting confirmation by a qualified clinician.</p>"
     if clinician.get("status") == "reviewed":
         diagnosis = html.escape(clinician.get("impression") or "No diagnosis entered.")
         rec = html.escape(clinician.get("recommendation") or "None entered.")
-        review_html = f"<h2>Clinician review</h2><p><b>Impression:</b> {diagnosis}</p><p><b>Next step:</b> {rec}</p>"
-    diag_html = "<h2>Scope</h2><p>Technical image review only. No automated diagnosis or treatment advice was generated.</p>"
+        review_html = f"<h2>Clinician-confirmed diagnosis</h2><p><b>Diagnosis:</b> {diagnosis}</p><p><b>Next step:</b> {rec}</p>"
     return (
-        f"<!DOCTYPE html><html><body><h1>ProbStrip General Image Review</h1>"
-        f"{diag_html}<h2>Quality checks</h2><table>{checks}</table>"
-        f"<h2>Observations</h2><ul>{observations}</ul>{review_html}</body></html>"
+        f"<!DOCTYPE html><html><body><h1>ProbStrip Clinical Image Report</h1>"
+        f"{review_html}</body></html>"
     )

@@ -22,9 +22,9 @@ def make_report_payload(
     return {
         "case_id": case_id,
         "created_at": datetime.now(timezone.utc).isoformat(),
-        "intended_use": "Research support for retinal vessel mapping and image-quality review",
+        "intended_use": "AI-assisted retinal vessel mapping for clinician interpretation",
         "diagnosis": None,
-        "diagnosis_message": "No diagnosis was made. No automated diagnosis was generated. Vessel measurements are research outputs only.",
+        "diagnosis_message": "Diagnosis status: awaiting clinician confirmation. The AI model provides supporting retinal vessel measurements.",
         "quality": quality.to_dict(),
         "research_measures": measures,
         "review_outcome": outcome,
@@ -35,17 +35,17 @@ def make_report_payload(
 
 
 def report_as_json(payload):
-    return json.dumps(payload, indent=2)
+    exported = dict(payload)
+    exported.pop("quality", None)
+    return json.dumps(exported, indent=2)
 
 
 def report_as_html(payload):
-    quality = payload["quality"]
     clinician_review = payload.get("clinician_review") or {}
     measures = (
         clinician_review.get("reviewed_research_measures")
         or payload["research_measures"]
     )
-    outcome = payload["review_outcome"]
     diagnosis = payload.get("diagnosis") or {}
     review_block = ""
     if clinician_review.get("status") == "reviewed":
@@ -88,10 +88,9 @@ def report_as_html(payload):
         "#D97706;padding:12px;margin:1rem 0}}</style></head><body><h1>ProbStrip retinal "
         f"report</h1><p><strong>Reference:</strong> {html.escape(payload['case_id'])}</p>"
         f"<p><strong>Created:</strong> {html.escape(payload['created_at'])}</p><div class='notice'>"
-        f"{html.escape(payload['safety_notice'])}</div>{diag_block}<h2>Image quality: "
-        f"{quality['score']}/100</h2><p>{html.escape(outcome.get('explanation', ''))}</p>"
-        f"<p><strong>Scope:</strong> {html.escape(payload.get('diagnosis_message', 'No automated diagnosis was generated.'))}</p>"
-        f"{review_block}<h2>Vascular measurements</h2><table><tr><th>Measure</th><th>Value</th>"
+        f"{html.escape(payload['safety_notice'])}</div>{review_block}{diag_block}"
+        f"<h2>Diagnosis status</h2><p>{html.escape(payload.get('diagnosis_message', 'Awaiting clinician confirmation.'))}</p>"
+        f"<h2>Supporting vessel measurements</h2><table><tr><th>Measure</th><th>Value</th>"
         f"</tr>{rows}</table></body></html>"
     )
 
@@ -112,7 +111,7 @@ def report_as_fhir(payload):
             "resourceType": "DiagnosticReport",
             "id": payload.get("case_id", "").lower(),
             "status": "preliminary",
-            "category": [{"text": "Research retinal image analysis"}],
+            "category": [{"text": "AI-assisted retinal image analysis"}],
             "code": {"text": "Retinal vessel mapping and diagnostic risk assessment"},
             "effectiveDateTime": payload.get("created_at", ""),
             "conclusion": review.get("impression") or payload.get("diagnosis_message", ""),

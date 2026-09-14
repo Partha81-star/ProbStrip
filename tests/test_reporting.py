@@ -36,16 +36,18 @@ def test_report_never_claims_a_diagnosis():
     payload = _payload()
 
     assert payload["diagnosis"] is None
-    assert "No diagnosis" in report_as_html(payload)
-    assert json.loads(report_as_json(payload))["diagnosis"] is None
+    assert "awaiting clinician confirmation" in report_as_html(payload)
+    exported = json.loads(report_as_json(payload))
+    assert exported["diagnosis"] is None
+    assert "quality" not in exported
 
 
-def test_fhir_export_is_preliminary_and_research_labeled():
+def test_fhir_export_is_preliminary_and_ai_assisted():
     fhir = json.loads(report_as_fhir(_payload()))
 
     assert fhir["resourceType"] == "DiagnosticReport"
     assert fhir["status"] == "preliminary"
-    assert "Research" in fhir["category"][0]["text"]
+    assert "AI-assisted" in fhir["category"][0]["text"]
 
 
 def test_reviewed_measure_is_used_in_clinician_exports():
@@ -91,5 +93,6 @@ def test_patient_pdf_is_valid_and_contains_safety_content():
 
     assert pdf.startswith(b"%PDF-")
     assert len(reader.pages) >= 1
-    assert "No automated diagnosis was generated" in text.replace("\n", " ")
-    assert "Image-quality checks" in text
+    assert "Awaiting confirmation" in text.replace("\n", " ")
+    assert "Image-quality" not in text
+    assert "Quality score" not in text

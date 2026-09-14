@@ -12,7 +12,6 @@ from reportlab.platypus import (
     Image,
     KeepTogether,
     Paragraph,
-    PageBreak,
     SimpleDocTemplate,
     Spacer,
     Table,
@@ -252,28 +251,42 @@ def _clinician_section(payload, styles):
     review = payload.get("clinician_review") or {}
     if review.get("status") != "reviewed":
         return [
-            Paragraph("Clinical interpretation", styles["Section"]),
+            Paragraph("Diagnosis", styles["Section"]),
             Paragraph(
-                "Awaiting confirmation by a qualified healthcare professional. Pre-populated automated findings must be validated against patient symptoms.",
+                "Awaiting confirmation by a qualified healthcare professional.",
                 styles["BodySmall"],
             ),
         ]
-    return [
-        Paragraph("Clinician review", styles["Section"]),
-        Paragraph(
-            f"<b>Impression or diagnosis:</b> {_safe(review.get('impression') or 'No diagnosis entered.')}",
+    diagnosis_card = Table(
+        [[Paragraph(
+            f"<b>{_safe(review.get('impression') or 'No diagnosis entered.')}</b><br/>"
+            f"<b>Clinical notes:</b> {_safe(review.get('note') or review.get('observations') or 'None entered.')}<br/>"
+            f"<b>Recommended next step:</b> {_safe(review.get('recommendation') or 'Follow local clinical guidance.')}",
             styles["BodySmall"],
-        ),
-        Spacer(1, 1.5 * mm),
-        Paragraph(f"<b>Notes:</b> {_safe(review.get('note') or review.get('observations') or 'None entered.')}", styles["BodySmall"]),
-        Spacer(1, 1.5 * mm),
-        Paragraph(f"<b>Recommended next step:</b> {_safe(review.get('recommendation') or 'Follow local clinical guidance.')}", styles["BodySmall"]),
+        )]],
+        colWidths=[170 * mm],
+    )
+    diagnosis_card.setStyle(
+        TableStyle(
+            [
+                ("BACKGROUND", (0, 0), (-1, -1), PALE_TEAL),
+                ("BOX", (0, 0), (-1, -1), 0.8, TEAL),
+                ("LEFTPADDING", (0, 0), (-1, -1), 10),
+                ("RIGHTPADDING", (0, 0), (-1, -1), 10),
+                ("TOPPADDING", (0, 0), (-1, -1), 9),
+                ("BOTTOMPADDING", (0, 0), (-1, -1), 9),
+            ]
+        )
+    )
+    return [
+        Paragraph("Clinician-confirmed diagnosis", styles["Section"]),
+        diagnosis_card,
+        Spacer(1, 2 * mm),
     ]
 
 
 def retinal_report_as_pdf(payload, original_image=None, result_image=None):
     styles = _styles()
-    quality = payload["quality"]
     review = payload.get("clinician_review") or {}
     measures = review.get("reviewed_research_measures") or payload["research_measures"]
     outcome = payload["review_outcome"]
@@ -288,26 +301,28 @@ def retinal_report_as_pdf(payload, original_image=None, result_image=None):
         Paragraph("ProbStrip Retinal Vessel Report", styles["ReportTitle"]),
         Paragraph(f"Report reference: {_safe(payload['case_id'])}<br/>Created: {_safe(payload['created_at'])}", styles["Muted"]),
         Spacer(1, 4 * mm),
-        _notice(payload["safety_notice"], styles),
+    ]
+    story.extend(_clinician_section(payload, styles))
+    story.extend(_diagnosis_section(payload, styles))
+    story.extend([
         Paragraph("Result summary", styles["Section"]),
         Paragraph(f"<b>{_safe(outcome_text)}</b>", styles["BodySmall"]),
         Spacer(1, 2 * mm),
         Paragraph(
-            "The values below describe research measurements and software output. "
+            "The values below describe supporting vessel measurements. "
             + _safe(payload.get("diagnosis_message", "No automated diagnosis was generated.")),
             styles["BodySmall"],
         ),
-    ]
+    ])
 
     metric_rows = [
-        ["Image quality", "Visible vessel coverage", "Area needing review"],
+        ["Visible vessel coverage", "Area needing review"],
         [
-            f"{quality['score']}/100",
             f"{measures['visible_vessel_coverage_percent']:.2f}%",
             f"{measures['low_confidence_area_percent']:.2f}%",
         ],
     ]
-    metrics = Table(metric_rows, colWidths=[56 * mm] * 3)
+    metrics = Table(metric_rows, colWidths=[85 * mm] * 2)
     metrics.setStyle(
         TableStyle(
             [
@@ -325,8 +340,6 @@ def retinal_report_as_pdf(payload, original_image=None, result_image=None):
         )
     )
     story.extend([Spacer(1, 4 * mm), metrics, Spacer(1, 3 * mm)])
-    story.extend(_diagnosis_section(payload, styles))
-    story.extend(_clinician_section(payload, styles))
 
     original = _image(original_image) if original_image is not None else None
     result = _image(result_image) if result_image is not None else None
@@ -351,46 +364,27 @@ def retinal_report_as_pdf(payload, original_image=None, result_image=None):
         )
         story.append(KeepTogether([Paragraph("Images", styles["Section"]), image_table]))
 
-    story.extend(
-        [
-            PageBreak(),
-            Paragraph("Image-quality checks", styles["Section"]),
-            Paragraph(_safe(quality["summary"]), styles["BodySmall"]),
-            Spacer(1, 2 * mm),
-            _quality_table(quality["checks"], styles),
-            Paragraph("Technical provenance", styles["Section"]),
-            Paragraph(
-                f"Model: {_safe(payload.get('model_settings', {}).get('model', 'ProbStrip'))}<br/>"
-                f"Checkpoint: {_safe(payload.get('model_settings', {}).get('checkpoint_sha256', 'Not recorded'))}<br/>"
-                f"Calibration: {_safe(payload.get('model_settings', {}).get('calibration_status', 'Research profile'))}<br/>"
-                f"Quality policy: {_safe(quality.get('policy_version', 'legacy'))}",
-                styles["BodySmall"],
-            ),
-            Paragraph("Safety reminder", styles["Section"]),
-            Paragraph(
-                "Seek prompt professional care for sudden vision loss, severe eye pain, new flashes, or many new floaters. Do not wait for this report.",
-                styles["BodySmall"],
-            ),
-        ]
-    )
+    story.extend([
+        Spacer(1, 3 * mm),
+        _notice(payload["safety_notice"], styles),
+        Paragraph("Safety reminder", styles["Section"]),
+        Paragraph(
+            "Seek prompt professional care for sudden vision loss, severe eye pain, new flashes, or many new floaters. Do not wait for this report.",
+            styles["BodySmall"],
+        ),
+    ])
     return _document(story)
 
 
 def general_report_as_pdf(payload, original_image=None, result_image=None):
     styles = _styles()
-    quality = payload["technical_quality"]
     story = [
         Paragraph(f"ProbStrip {_safe(payload['imaging_type'])} Report", styles["ReportTitle"]),
         Paragraph(f"Report reference: {_safe(payload['case_id'])}<br/>Created: {_safe(payload['created_at'])}", styles["Muted"]),
         Spacer(1, 4 * mm),
-        _notice(payload["safety_notice"], styles),
-        Paragraph("Technical observations", styles["Section"]),
     ]
-    for item in payload["technical_observations"]:
-        story.append(Paragraph(f"- {_safe(item)}", styles["BodySmall"]))
-
-    story.extend(_diagnosis_section(payload, styles))
     story.extend(_clinician_section(payload, styles))
+    story.extend(_diagnosis_section(payload, styles))
 
     original = _image(original_image) if original_image is not None else None
     result = _image(result_image) if result_image is not None else None
@@ -401,17 +395,13 @@ def general_report_as_pdf(payload, original_image=None, result_image=None):
         )
         images.setStyle(TableStyle([("ALIGN", (0, 0), (-1, -1), "CENTER"), ("FONTNAME", (0, 1), (-1, 1), "Helvetica-Bold"), ("FONTSIZE", (0, 1), (-1, 1), 8)]))
         story.append(KeepTogether([Paragraph("Images", styles["Section"]), images]))
-    story.extend(
-        [
-            Paragraph("Image-quality checks", styles["Section"]),
-            Paragraph(f"Quality score: {quality['score']}/100. {_safe(quality['status'])}", styles["BodySmall"]),
-            Spacer(1, 2 * mm),
-            _quality_table(quality["checks"], styles, general=True),
-            Paragraph("Report limitation", styles["Section"]),
-            Paragraph(
-                "Enhanced views are algorithmic visual processing aids and must be interpreted by a licensed clinician.",
-                styles["BodySmall"],
-            ),
-        ]
-    )
+    story.extend([
+        Spacer(1, 3 * mm),
+        _notice(payload["safety_notice"], styles),
+        Paragraph("Report limitation", styles["Section"]),
+        Paragraph(
+            "AI-assisted views must be interpreted with the original image, patient history, and clinical examination.",
+            styles["BodySmall"],
+        ),
+    ])
     return _document(story)

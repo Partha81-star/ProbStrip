@@ -407,23 +407,23 @@ def render_patient_result(case, language):
     )
 
     st.subheader("Your report", anchor=False)
-    m1, m2, m3 = st.columns(3)
-    m1.metric("Image quality", f"{case['quality'].score}/100")
     if case["prediction"] is None:
-        m2.metric("Vessel map", "Not created")
-        m3.metric("Software confidence", "Not available")
+        status_a, status_b = st.columns(2)
+        status_a.metric("Vessel map", "Not created")
+        status_b.metric("Clinical diagnosis", "Awaiting confirmation")
         failed_checks = [
             check.name for check in case["quality"].checks if check.status == "Retake"
         ]
         if failed_checks:
             st.warning("Mapping stopped because: " + ", ".join(failed_checks) + ".")
     else:
-        m2.metric(
+        m1, m2 = st.columns(2)
+        m1.metric(
             "Visible vessel coverage",
             f"{display_measures['visible_vessel_coverage_percent']:.1f}%",
             help="The share of the visible retinal field marked as vessel by the model. This is not a disease score.",
         )
-        m3.metric(
+        m2.metric(
             "Area needing review",
             f"{display_measures['low_confidence_area_percent']:.1f}%",
             help="The share of the image where repeated model passes disagreed.",
@@ -455,8 +455,8 @@ def render_patient_result(case, language):
             unsafe_allow_html=True,
         )
 
-    diag_tab, report_tab, image_tab, quality_tab = st.tabs(
-        ["Vessel measurements", "What this means", "Your images", "Image-quality details"]
+    diag_tab, report_tab, image_tab = st.tabs(
+        ["Vessel measurements", "What this means", "Your images"]
     )
     with diag_tab:
         if diagnosis and diagnosis.get("differential_diagnoses"):
@@ -502,10 +502,6 @@ def render_patient_result(case, language):
                 caption="Teal: mapped vessels. Amber: areas needing review.",
                 width="stretch",
             )
-    with quality_tab:
-        st.write(case["quality"].summary)
-        st.dataframe(quality_table(case["quality"]), hide_index=True, width="stretch")
-
     st.subheader("Take this report to your clinician", anchor=False)
     st.download_button(
         "Download PDF report",
@@ -769,14 +765,17 @@ def general_imaging_page(modality):
 
     quality = result["quality"]
     st.subheader(f"{result['modality']} review", anchor=False)
-    metric_a, metric_b, metric_c = st.columns(3)
-    metric_a.metric("Technical quality", f"{quality['score']}/100")
-    metric_b.metric("Quality status", quality["status"])
-    metric_c.metric(
-        "Visible edge area",
-        f"{result['edge_area_percent']:.1f}%",
-        help="The amount of edge contrast in this image, not an abnormality score.",
-    )
+    clinician_review = result["payload"].get("clinician_review") or {}
+    if clinician_review.get("status") == "reviewed":
+        st.success(
+            f"Clinician-confirmed diagnosis: {clinician_review.get('impression', 'Recorded')}"
+        )
+        if clinician_review.get("recommendation"):
+            st.markdown(
+                f"**Recommended next step:** {clinician_review['recommendation']}"
+            )
+    else:
+        st.warning("Diagnosis status: awaiting confirmation by a qualified clinician.")
     original_col, enhanced_col = st.columns(2)
     original_col.image(result["original"], caption="Original image", width="stretch")
     enhanced_col.image(
@@ -865,17 +864,6 @@ def general_imaging_page(modality):
                 "reviewed_at": datetime.now(timezone.utc).isoformat(),
             }
             st.success("Clinician assessment added to this session report.")
-
-    with st.expander("Technical quality details"):
-        quality_rows = [
-            {
-                "Check": check["name"],
-                "Measured value": f"{check['value']:.1f} {check['unit']}",
-                "Result": "Pass" if check["ok"] else "Review",
-            }
-            for check in quality["checks"]
-        ]
-        st.dataframe(pd.DataFrame(quality_rows), hide_index=True, width="stretch")
 
     st.subheader("Download report", anchor=False)
     st.download_button(
