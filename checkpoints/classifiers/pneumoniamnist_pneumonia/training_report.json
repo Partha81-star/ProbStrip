@@ -1,0 +1,18 @@
+{
+  "task_id": "pneumoniamnist_pneumonia",
+  "dataset": "PneumoniaMNIST",
+  "samples": {
+    "train": 4708,
+    "validation": 524,
+    "test": 624
+  },
+  "best_validation_auc": 0.995125,
+  "release_status": "research_only",
+  "dataset_license": "CC BY 4.0",
+  "dataset_source_url": "https://zenodo.org/records/10519652",
+  "limitations": [
+    "28x28 pediatric chest X-ray benchmark",
+    "not clinically validated",
+    "not a diagnosis or treatment recommendation"
+  ]
+}
