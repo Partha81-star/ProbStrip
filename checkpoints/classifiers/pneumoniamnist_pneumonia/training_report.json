@@ -6,13 +6,41 @@
     "validation": 524,
     "test": 624
   },
-  "best_validation_auc": 0.995125,
+  "best_epoch": 3,
+  "validation_metrics": {
+    "threshold": 0.29,
+    "auc": 0.99444,
+    "sensitivity": 0.974293,
+    "specificity": 0.977778,
+    "balanced_accuracy": 0.976035,
+    "brier_score": 0.026857,
+    "ece": 0.034166,
+    "tp": 379,
+    "tn": 132,
+    "fp": 3,
+    "fn": 10
+  },
+  "test_metrics": {
+    "threshold": 0.29,
+    "auc": 0.95549,
+    "sensitivity": 0.984615,
+    "specificity": 0.65812,
+    "balanced_accuracy": 0.821368,
+    "brier_score": 0.09618,
+    "ece": 0.089663,
+    "tp": 384,
+    "tn": 154,
+    "fp": 80,
+    "fn": 6
+  },
   "release_status": "research_only",
   "dataset_license": "CC BY 4.0",
   "dataset_source_url": "https://zenodo.org/records/10519652",
+  "intended_population": "Pediatric chest radiographs matching the source dataset",
   "limitations": [
     "28x28 pediatric chest X-ray benchmark",
-    "not clinically validated",
+    "single binary pneumonia-versus-normal task",
+    "not externally or prospectively clinically validated",
     "not a diagnosis or treatment recommendation"
   ]
 }

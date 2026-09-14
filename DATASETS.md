@@ -20,6 +20,7 @@ the repository. Dataset access terms and required attribution must be preserved.
 
 - MURA: <https://stanfordmlgroup.github.io/competitions/mura/>
 - CheXpert: <https://stanfordmlgroup.github.io/competitions/chexpert/>
+- PneumoniaMNIST: <https://zenodo.org/records/10519652>
 - LIDC-IDRI: <https://www.cancerimagingarchive.net/collection/lidc-idri/>
 - ISIC challenge data: <https://challenge.isic-archive.com/data/>
 

@@ -1,5 +1,6 @@
 """Train the lightweight PneumoniaMNIST chest X-ray research benchmark."""
 import argparse
+import copy
 import json
 from pathlib import Path
 
@@ -9,6 +10,17 @@ from torch import nn
 from torch.utils.data import DataLoader, TensorDataset
 
 from models.medical_classifier import CompactMedicalClassifier
+from train_classifier import binary_metrics, select_balanced_threshold
+
+
+def predict(model, loader):
+    model.eval()
+    probabilities, labels = [], []
+    with torch.no_grad():
+        for images, batch_labels in loader:
+            probabilities.extend(torch.sigmoid(model(images).squeeze(1)).tolist())
+            labels.extend(batch_labels.tolist())
+    return probabilities, labels
 
 
 def main():
@@ -36,7 +48,9 @@ def main():
     optimizer = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=1e-4)
     counts = np.bincount(data["train_labels"].reshape(-1), minlength=2)
     criterion = nn.BCEWithLogitsLoss(pos_weight=torch.tensor([counts[0] / max(counts[1], 1)]))
-    best_auc, best_state = -1.0, None
+    torch.manual_seed(42)
+    np.random.seed(42)
+    best_auc, best_state, best_epoch = -1.0, None, 0
     for epoch in range(args.epochs):
         model.train()
         for images, labels in loader:
@@ -44,25 +58,38 @@ def main():
             loss = criterion(model(images).squeeze(1), labels)
             loss.backward()
             optimizer.step()
-        model.eval()
-        probs, labels = [], []
-        with torch.no_grad():
-            for images, batch_labels in val_loader:
-                probs.extend(torch.sigmoid(model(images).squeeze(1)).tolist())
-                labels.extend(batch_labels.tolist())
-        order = np.argsort(probs)
-        y = np.asarray(labels)[order]
-        ranks = np.arange(1, len(y) + 1)
-        auc = float((ranks[y == 1].sum() - (y == 1).sum() * ((y == 1).sum() + 1) / 2) / max((y == 1).sum() * (y == 0).sum(), 1))
+        probs, labels = predict(model, val_loader)
+        auc = binary_metrics(probs, labels)["auc"]
         print(f"Epoch {epoch + 1}/{args.epochs} - validation AUROC: {auc:.4f}")
         if auc > best_auc:
-            best_auc, best_state = auc, {k: v.cpu() for k, v in model.state_dict().items()}
+            best_auc, best_epoch = auc, epoch + 1
+            best_state = copy.deepcopy(model.state_dict())
     output = args.checkpoint_root / "pneumoniamnist_pneumonia" 
     output.mkdir(parents=True, exist_ok=True)
     model.load_state_dict(best_state)
     torch.save(model.state_dict(), output / "best_model.pth")
     torch.save(model.state_dict(), output / "latest_model.pth")
-    report = {"task_id": "pneumoniamnist_pneumonia", "dataset": "PneumoniaMNIST", "samples": {"train": len(train), "validation": len(val), "test": len(test)}, "best_validation_auc": round(best_auc, 6), "release_status": "research_only", "dataset_license": "CC BY 4.0", "dataset_source_url": "https://zenodo.org/records/10519652", "limitations": ["28x28 pediatric chest X-ray benchmark", "not clinically validated", "not a diagnosis or treatment recommendation"]}
+    val_probabilities, val_labels = predict(model, val_loader)
+    threshold = select_balanced_threshold(val_probabilities, val_labels)
+    test_probabilities, test_labels = predict(model, test_loader)
+    report = {
+        "task_id": "pneumoniamnist_pneumonia",
+        "dataset": "PneumoniaMNIST",
+        "samples": {"train": len(train), "validation": len(val), "test": len(test)},
+        "best_epoch": best_epoch,
+        "validation_metrics": binary_metrics(val_probabilities, val_labels, threshold),
+        "test_metrics": binary_metrics(test_probabilities, test_labels, threshold),
+        "release_status": "research_only",
+        "dataset_license": "CC BY 4.0",
+        "dataset_source_url": "https://zenodo.org/records/10519652",
+        "intended_population": "Pediatric chest radiographs matching the source dataset",
+        "limitations": [
+            "28x28 pediatric chest X-ray benchmark",
+            "single binary pneumonia-versus-normal task",
+            "not externally or prospectively clinically validated",
+            "not a diagnosis or treatment recommendation",
+        ],
+    }
     (output / "training_report.json").write_text(json.dumps(report, indent=2), encoding="utf-8")
     print(json.dumps(report, indent=2))
 

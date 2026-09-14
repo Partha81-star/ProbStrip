@@ -10,9 +10,9 @@ MODEL_TASKS = {
         "dataset": "MURA",
     },
     "Chest X-ray": {
-        "task_id": "chexpert_findings",
-        "task": "Chest radiograph finding research classification",
-        "dataset": "CheXpert",
+        "task_id": "pneumoniamnist_pneumonia",
+        "task": "Pediatric chest radiograph pneumonia screening classification",
+        "dataset": "PneumoniaMNIST",
     },
     "CT image": {
         "task_id": "lidc_lung_nodule",
