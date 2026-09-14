@@ -24,7 +24,6 @@ from clinical.general_reporting import (
     make_general_report_payload,
 )
 from clinical.modalities import MODALITIES, analyze_general_image
-from clinical.model_registry import model_task_status
 from clinical.pdf_reporting import general_report_as_pdf, retinal_report_as_pdf
 from clinical.quality import QUALITY_POLICY_VERSION, assess_image_quality
 from clinical.registration import register_followup, vessel_change_map
@@ -683,15 +682,6 @@ def general_imaging_page(modality):
     )
 
     modality_info = MODALITIES[modality]
-    task_status = model_task_status(modality, APP_ROOT)
-    if task_status["available"]:
-        st.info(
-            f"Research model available: {task_status['task']}. It is not clinically validated and is not used to prescribe treatment."
-        )
-    else:
-        st.info(
-            f"Model status: {task_status['clinical_readiness']}. Planned dataset: {task_status['dataset']}. This page currently provides technical image review only."
-        )
     st.caption(modality_info["guidance"])
     source = st.segmented_control(
         "Image source",
