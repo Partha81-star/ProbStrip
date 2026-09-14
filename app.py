@@ -98,10 +98,11 @@ st.markdown(
 
 PATIENT_TEXT = {
     "English": {
-        "no_diagnosis": "Research vessel analysis only",
+        "no_diagnosis": "AI-assisted retinal vessel assessment",
         "no_diagnosis_body": (
             "ProbStrip maps visible blood vessels and marks places where the software "
-            "is unsure. It cannot tell whether you have an eye disease."
+            "is unsure. An eye-care professional should interpret this analysis with "
+            "your examination, symptoms, and medical history before making a diagnosis."
         ),
         "ready": "Vessel map ready for clinician review",
         "review": "Clinician review is especially important",
@@ -229,7 +230,7 @@ def load_calibration_profile(profile_path: str):
     path = Path(profile_path)
     if not path.is_file():
         return {
-            "status": "uncalibrated research defaults",
+            "status": "uncalibrated default thresholds",
             "decision_threshold": 0.5,
             "uncertainty_threshold": 0.02,
             "dataset": "none",
@@ -455,11 +456,11 @@ def render_patient_result(case, language):
         )
 
     diag_tab, report_tab, image_tab, quality_tab = st.tabs(
-        ["Research measurements", "What this means", "Your images", "Image-quality details"]
+        ["Vessel measurements", "What this means", "Your images", "Image-quality details"]
     )
     with diag_tab:
         if diagnosis and diagnosis.get("differential_diagnoses"):
-            st.markdown("**Research measurement breakdown**")
+            st.markdown("**Vessel measurement breakdown**")
             diff_df = pd.DataFrame(
                 [
                     {
@@ -472,9 +473,9 @@ def render_patient_result(case, language):
                 ]
             )
             st.dataframe(diff_df, hide_index=True, width="stretch")
-            st.caption("These are exploratory vessel measurements, not disease probabilities or treatment recommendations.")
+            st.caption("These measurements describe the vessel map; they are not disease probabilities.")
         else:
-            st.info("No automated diagnosis is provided. Review the vessel measurements and uncertainty with a qualified clinician.")
+            st.info("The vessel map and uncertainty assessment are ready for interpretation by a qualified eye-care professional.")
     with report_tab:
         st.markdown("**What the numbers mean**")
         st.write(
@@ -534,11 +535,12 @@ def analyze_page(settings, language):
         return
 
     st.write(
-        "Upload an image to assess capture quality, map retinal vessels, and calculate research measurements."
+        "Upload an image to assess capture quality, map visible retinal vessels, and highlight areas requiring closer review."
     )
     st.markdown(
-        '<div class="safety-bar"><strong>Research review.</strong> This system provides '
-        "retinal vessel segmentation and uncertainty visualization, not diagnosis or treatment advice.</div>",
+        '<div class="safety-bar"><strong>AI-assisted retinal assessment.</strong> '
+        "ProbStrip detects visible retinal vessels and highlights uncertain areas to support clinical interpretation. "
+        "A qualified eye-care professional must confirm the diagnosis and treatment plan.</div>",
         unsafe_allow_html=True,
     )
 
@@ -549,7 +551,7 @@ def analyze_page(settings, language):
             help="Upload a retinal photograph or medical scan centered and in focus.",
         )
         consent = st.checkbox(
-            "I understand this provides research image analysis, not a medical diagnosis or treatment recommendation."
+            "I understand this analysis supports, but does not replace, diagnosis by a qualified eye-care professional."
         )
         submitted = st.form_submit_button(
             "Check image and create report", type="primary", width="stretch"
@@ -563,7 +565,7 @@ def analyze_page(settings, language):
         else:
             try:
                 image_bytes = uploaded.getvalue()
-                with st.spinner("Checking image quality and calculating research vessel measurements..."):
+                with st.spinner("Checking image quality and calculating vessel measurements..."):
                     case = create_and_store_case(image_bytes, settings, language)
                 st.success(f"Report created successfully: {case['case_id']}")
             except (FileNotFoundError, RuntimeError, ValueError) as exc:
@@ -594,7 +596,7 @@ def camera_page(settings, language):
             help="This opens the device camera. It is not a substitute for a fundus camera.",
         )
         camera_consent = st.checkbox(
-            "I understand the captured image creates a research map, not a diagnosis.",
+            "I understand the captured vessel map requires interpretation by a qualified eye-care professional.",
             key="camera-consent",
         )
         analyze_capture = st.button(
@@ -619,7 +621,7 @@ def camera_page(settings, language):
                     st.error(str(exc))
 
     with live_tab:
-        st.markdown("**Low-latency research preview**")
+        st.markdown("**Low-latency positioning preview**")
         st.info(
             "The live overlay uses one smaller model pass for speed and does not calculate "
             "clinical uncertainty. Teal pixels are the latest vessel estimate. Use the "
@@ -886,8 +888,8 @@ def general_imaging_page(modality):
 def compare_page():
     st.header("Compare visits", anchor=False)
     st.write(
-        "Align and compare two vessel maps from this session. Measurements are shown "
-        "only as research morphology and are not a diagnosis."
+        "Align and compare two vessel maps from this session. The comparison describes "
+        "visible structural change for clinician interpretation."
     )
     mapped = [case for case in st.session_state.cases if case["prediction"] is not None]
     if len(mapped) < 2:
@@ -976,7 +978,7 @@ def compare_page():
 def clinician_page():
     st.header("Clinician details", anchor=False)
     st.write(
-        "Technical output for review and research documentation. Every report remains preliminary."
+        "AI-assisted technical output for clinical review. Every report remains preliminary until clinician sign-off."
     )
     if not st.session_state.cases:
         st.info("Analyze a retinal image to view its technical record.")
@@ -1181,7 +1183,7 @@ def safety_page():
     st.write(
         "It does not detect or rule out a disease, fracture, or lesion; prescribe "
         "treatment; replace a clinical examination; or provide emergency advice. The "
-        "current AI checkpoint is retinal-only, was developed from a small research "
+        "current AI checkpoint is retinal-only, was developed from a small "
         "dataset, and has not been prospectively validated."
     )
     st.subheader("Privacy in this release", anchor=False)
@@ -1194,7 +1196,7 @@ def safety_page():
         "Use the sidebar control to clear every image and report reference held by the "
         "current browser session. Closing or expiring the session also releases them."
     )
-    st.subheader("For researchers", anchor=False)
+    st.subheader("Clinical readiness", anchor=False)
     st.write(
         "Clinical use requires representative multi-site evaluation, subgroup analysis, "
         "calibration and abstention validation, cybersecurity controls, quality management, "
@@ -1220,7 +1222,7 @@ def main():
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         st.error(f"Calibration profile error: {exc}")
         calibration = {
-            "status": "invalid profile; research defaults active",
+            "status": "invalid profile; default thresholds active",
             "decision_threshold": 0.5,
             "uncertainty_threshold": 0.02,
             "dataset": "none",

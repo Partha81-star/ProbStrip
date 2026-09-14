@@ -10,7 +10,8 @@ def test_initial_patient_screen_renders_without_exception():
 
     assert not app.exception
     assert app.header[0].value == "Review a medical image"
-    assert "not a medical diagnosis" in app.checkbox[0].label
+    assert "does not replace" in app.checkbox[0].label
+    assert any("AI-assisted retinal assessment" in item.value for item in app.markdown)
     assert "Camera and live" in app.radio[0].options
 
 
