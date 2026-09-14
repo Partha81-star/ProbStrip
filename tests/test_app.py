@@ -59,6 +59,8 @@ def test_review_screen_exposes_trained_chest_path():
         "Retinal fundus image",
         "Bone or joint X-ray",
         "Chest X-ray",
+        "Breast ultrasound",
+        "Skin or external photo",
     ]
 
     category.set_value("Chest X-ray")
@@ -66,6 +68,20 @@ def test_review_screen_exposes_trained_chest_path():
 
     assert not app.exception
     assert any("pneumonia pattern screening" in item.value for item in app.markdown)
+
+
+def test_review_screen_supports_breast_ultrasound():
+    app_path = Path(__file__).resolve().parents[1] / "app.py"
+    app = AppTest.from_file(app_path, default_timeout=30).run()
+    category = next(
+        selectbox for selectbox in app.selectbox if "Breast ultrasound" in selectbox.options
+    )
+
+    category.set_value("Breast ultrasound")
+    app.run()
+
+    assert not app.exception
+    assert any("breast lesion segmentation and pattern screening" in item.value for item in app.markdown)
 
 
 def test_general_imaging_page_does_not_shadow_pandas_import():

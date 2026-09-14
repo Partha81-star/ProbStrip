@@ -13,6 +13,16 @@ MODALITIES = {
         "view": "Chest structure view",
         "guidance": "Include the full chest, side marker, and exposure field. Do not crop the lung edges.",
     },
+    "Breast ultrasound": {
+        "short": "breast ultrasound",
+        "view": "Breast ultrasound lesion segmentation view",
+        "guidance": "Upload an original B-mode breast ultrasound export (BUSI format). Avoid camera glare or cropped scan sectors.",
+    },
+    "Skin or external photo": {
+        "short": "skin lesion photo",
+        "view": "Dermatological lesion border view",
+        "guidance": "Provide an in-focus dermoscopic or macro photograph centered on the skin lesion with uniform lighting.",
+    },
 }
 
 

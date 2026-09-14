@@ -24,10 +24,15 @@ MODEL_TASKS = {
         "task": "A body region and clinical task must be selected before training",
         "dataset": "Not selected",
     },
+    "Breast ultrasound": {
+        "task_id": "busi_breast_ultrasound",
+        "task": "Breast ultrasound lesion segmentation and pattern screening (Normal / Benign / Malignant)",
+        "dataset": "BUSI (Breast Ultrasound Images Dataset)",
+    },
     "Ultrasound image": {
-        "task_id": "ultrasound_task_unselected",
-        "task": "An organ and clinical task must be selected before training",
-        "dataset": "Not selected",
+        "task_id": "busi_breast_ultrasound",
+        "task": "Breast ultrasound lesion segmentation and pattern screening (Normal / Benign / Malignant)",
+        "dataset": "BUSI (Breast Ultrasound Images Dataset)",
     },
     "Skin or external photo": {
         "task_id": "skin_malignancy_isic2024",

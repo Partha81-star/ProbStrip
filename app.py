@@ -20,6 +20,8 @@ from clinical.analysis import (
 )
 from clinical.biomarkers import calculate_vascular_biomarkers, reviewed_mask
 from clinical.chest_detection import detect_pneumonia
+from clinical.breast_ultrasound import detect_breast_ultrasound
+from clinical.skin_detection import detect_skin_lesion
 from clinical.patient_explanation import explain_model_result
 from clinical.general_reporting import (
     general_report_as_json,
@@ -605,7 +607,13 @@ def analyze_page(settings, language):
     st.header("Review a medical image", anchor=False)
     category = st.selectbox(
         "What kind of image are you reviewing?",
-        ["Retinal fundus image", "Bone or joint X-ray", "Chest X-ray"],
+        [
+            "Retinal fundus image",
+            "Bone or joint X-ray",
+            "Chest X-ray",
+            "Breast ultrasound",
+            "Skin or external photo",
+        ],
         key="review-image-category",
     )
     if category != "Retinal fundus image":
@@ -750,11 +758,16 @@ def camera_page(settings, language):
 
 
 def general_imaging_page(modality):
-    capability = (
-        "fracture localization"
-        if modality == "Bone or joint X-ray"
-        else "pneumonia pattern screening"
-    )
+    if modality == "Bone or joint X-ray":
+        capability = "fracture localization"
+    elif modality == "Chest X-ray":
+        capability = "pneumonia pattern screening"
+    elif modality == "Breast ultrasound":
+        capability = "breast lesion segmentation and pattern screening"
+    elif modality == "Skin or external photo":
+        capability = "skin lesion screening and border assessment"
+    else:
+        capability = "structural feature review"
     st.write(
         f"Upload or capture an image for automatic {capability} and a patient-friendly report."
     )
@@ -839,6 +852,14 @@ def general_imaging_page(modality):
                         load_pneumonia_model(str(PNEUMONIA_CHECKPOINT)),
                     )
                     automated_diagnosis = pneumonia_result["finding"]
+                elif modality == "Breast ultrasound":
+                    ultrasound_result = detect_breast_ultrasound(original)
+                    result["overlay"] = ultrasound_result["overlay"]
+                    automated_diagnosis = ultrasound_result["finding"]
+                elif modality == "Skin or external photo":
+                    skin_result = detect_skin_lesion(original)
+                    result["overlay"] = skin_result["overlay"]
+                    automated_diagnosis = skin_result["finding"]
                 if automated_diagnosis:
                     automated_diagnosis["patient_explanation"] = explain_model_result(
                         automated_diagnosis,
@@ -879,17 +900,32 @@ def general_imaging_page(modality):
         width="stretch",
         clamp=True,
     )
-    st.image(
-        result["overlay"],
-        caption=(
+    if modality == "Bone or joint X-ray":
+        overlay_caption = (
             "Red boxes show fracture candidates detected by the model."
             if diag and diag.get("detections")
-            else (
-                "Chest screening uses the complete image; the overlay supports visibility."
-                if modality == "Chest X-ray"
-                else "No fracture box exceeded the detection threshold."
-            )
-        ),
+            else "No fracture box exceeded the detection threshold."
+        )
+    elif modality == "Chest X-ray":
+        overlay_caption = "Chest screening uses the complete image; the overlay supports visibility."
+    elif modality == "Breast ultrasound":
+        overlay_caption = (
+            "Highlighted mask and contour mark the segmented candidate breast lesion."
+            if diag and diag.get("detections")
+            else "Normal breast parenchyma: no focal lesion segmentation mask."
+        )
+    elif modality == "Skin or external photo":
+        overlay_caption = (
+            "Colored mask and perimeter delineate the segmented skin lesion boundary."
+            if diag and diag.get("detections")
+            else "No focal pigmented lesion segmented."
+        )
+    else:
+        overlay_caption = "Structure-edge and feature overlay."
+
+    st.image(
+        result["overlay"],
+        caption=overlay_caption,
         width="stretch",
     )
     st.subheader("Detection and diagnosis", anchor=False)
@@ -931,6 +967,21 @@ def general_imaging_page(modality):
             st.markdown("**What to do next**")
             st.write(explanation.get("next_steps", diag.get("recommendation", "")))
             st.caption(explanation.get("urgent_warning", ""))
+        differentials = diag.get("differential_diagnoses") or []
+        if differentials:
+            st.markdown("**Differential Pattern Assessment**")
+            diff_df = pd.DataFrame(
+                [
+                    {
+                        "Condition / Pattern": d.get("condition"),
+                        "Risk Tier": d.get("risk_level"),
+                        "Probability Score": f"{d.get('probability_percent', 0)}%",
+                        "Clinical / Sonographic Evidence": d.get("evidence"),
+                    }
+                    for d in differentials
+                ]
+            )
+            st.dataframe(diff_df, hide_index=True, width="stretch")
     else:
         st.error("The screening model could not produce a result for this image.")
     report_id = result["payload"]["case_id"]
