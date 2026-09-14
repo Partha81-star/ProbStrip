@@ -678,8 +678,9 @@ def general_imaging_page(modality):
         "This workspace does not detect fractures, tumors, infections, or other disease."
     )
     st.markdown(
-        '<div class="safety-bar"><strong>Clinician interpretation is required.</strong> '
-        "The enhanced and teal edge views are visual aids, not diagnostic findings.</div>",
+        '<div class="safety-bar"><strong>Diagnosis and clinical findings.</strong> '
+        "After reviewing the original image and the AI-assisted views, a qualified "
+        "clinician can record the diagnosis and recommended next step in the report below.</div>",
         unsafe_allow_html=True,
     )
 
@@ -822,7 +823,10 @@ def general_imaging_page(modality):
                     "Supporting Evidence": d.get("evidence", ""),
                 })
             st.dataframe(pd.DataFrame(diff_rows), hide_index=True, width="stretch")
-    st.info("This workspace does not diagnose disease or recommend treatment. A qualified clinician may document an independent impression after reviewing the original image.")
+    st.info(
+        "Use the fields below to add the clinician-confirmed diagnosis and recommended "
+        "next step. The report will identify it as a clinician assessment."
+    )
     report_id = result["payload"]["case_id"]
     observations = st.text_area(
         "Clinician observations",
@@ -830,7 +834,7 @@ def general_imaging_page(modality):
         placeholder="Describe relevant image findings and limitations.",
     )
     impression = st.text_input(
-        "Clinical impression or diagnosis",
+        "Clinician-confirmed diagnosis",
         key=f"general-impression-{report_id}",
         placeholder="To be completed by a qualified healthcare professional.",
     )
@@ -844,7 +848,7 @@ def general_imaging_page(modality):
         key=f"general-confirmed-{report_id}",
     )
     if st.button(
-        "Add clinician assessment to report",
+        "Add diagnosis and assessment to report",
         width="stretch",
         key=f"general-save-{report_id}",
     ):

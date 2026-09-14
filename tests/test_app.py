@@ -44,6 +44,7 @@ def test_review_screen_supports_general_imaging_categories():
     assert not app.exception
     assert app.header[0].value == "Review a medical image"
     assert len(app.get("file_uploader")) == 1
+    assert any("Diagnosis and clinical findings" in item.value for item in app.markdown)
 
 
 def test_general_imaging_page_does_not_shadow_pandas_import():
