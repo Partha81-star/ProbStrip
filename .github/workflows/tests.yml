@@ -19,5 +19,4 @@ jobs:
       - name: Compile project
         run: python -m compileall -q .
       - name: Run tests
-        run: pytest -q
-
+        run: python -m pytest -q

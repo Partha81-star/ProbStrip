@@ -17,6 +17,7 @@ Presentation: [Updated TCA46 deck](docs/presentations/strip-CNN-medical-predicta
 - [x] Review Streamlit configuration, dependencies, and Git LFS checkpoints.
 - [x] Update the UI menu test to include the existing Blood cell microscopy option.
 - [x] Run the test suite: 57 tests passed locally.
+- [x] Use python -m pytest in CI so imports resolve from the repository root.
 - [ ] Complete Streamlit Community Cloud account sign-in.
 - [ ] Deploy main with entrypoint app.py and Python 3.11 or 3.12.
 - [ ] Verify the hosted interface and model loading.
