@@ -1,5 +1,7 @@
 # ProbStrip
 
+**Live app:** [Open ProbStrip](https://prob-strip.streamlit.app/)
+
 ProbStrip is a responsive Streamlit medical-image screening application with
 three supported workflows:
 
