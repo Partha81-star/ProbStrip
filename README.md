@@ -88,6 +88,11 @@ pipeline using PneumoniaMNIST. Provenance and measured test performance are in
 
 ## Deploy free on Streamlit Community Cloud
 
+Deployment status and the verified live URL are tracked in [TASKS.md](TASKS.md).
+The [Review-II presentation](docs/presentations/strip-CNN-medical-predictability-TCA46-Review-II.pptx)
+adds Progress & Technical Understanding and Analysis & Findings after slide 9
+of the supplied TCA46 deck. All original slides remain unchanged.
+
 1. Sign in at <https://share.streamlit.io> with the GitHub account that owns the repository.
 2. Create an app from `Partha81-star/ProbStrip`, branch `main`, entrypoint `app.py`.
 3. Select Python 3.11 in advanced settings.

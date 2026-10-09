@@ -43,3 +43,4 @@ evaluation_results/
 /training_runs/
 .streamlit/secrets.toml
 .ultralytics/
+/.ppt-build/

@@ -61,6 +61,7 @@ def test_review_screen_exposes_trained_chest_path():
         "Chest X-ray",
         "Breast ultrasound",
         "Skin or external photo",
+        "Blood cell microscopy",
     ]
 
     category.set_value("Chest X-ray")
