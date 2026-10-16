@@ -63,8 +63,8 @@ PNEUMONIA_CHECKPOINT = (
 )
 
 st.set_page_config(
-    page_title="ProbStrip Retinal Review",
-    page_icon="PS",
+    page_title="ProbStrip | Medical image review",
+    page_icon="🩺",
     layout="wide",
     initial_sidebar_state="auto",
 )
@@ -72,31 +72,32 @@ st.set_page_config(
 st.markdown(
     """
     <style>
-    :root { --ink:#17202a; --muted:#5f6b76; --teal:#0f766e; --amber:#b45309; }
-    .block-container { max-width: 1180px; padding-top: 1.6rem; padding-bottom: 3rem; }
-    h1, h2, h3 { letter-spacing: 0; color: var(--ink); }
-    .brand { font-size: 1.55rem; font-weight: 750; color: var(--ink); margin-bottom: .15rem; }
-    .brand-sub { color: var(--muted); margin-bottom: 1.3rem; }
-    .safety-bar { border-left: 5px solid var(--amber); background:#fff7ed; padding: .8rem 1rem; margin: .4rem 0 1.3rem; }
-    .result-ready { border-left: 5px solid #0f766e; background:#ecfdf5; padding: 1rem; }
-    .result-review { border-left: 5px solid #d97706; background:#fffbeb; padding: 1rem; }
-    .result-retake { border-left: 5px solid #b91c1c; background:#fef2f2; padding: 1rem; }
+    :root { --ink:#173047; --muted:#566879; --teal:#087e83; --line:#dce7e9; }
+    .block-container { max-width: 1120px; padding-top: 1.8rem; padding-bottom: 3.5rem; }
+    h1, h2, h3 { letter-spacing: -.025em; color: var(--ink); }
+    .brand { font-size: 1.52rem; font-weight: 760; color: var(--ink); margin-bottom: .1rem; letter-spacing:-.03em; }
+    .brand-sub { color: var(--muted); font-size:.88rem; margin-bottom: 1.35rem; }
+    .eyebrow { color:var(--teal); font-size:.74rem; font-weight:800; letter-spacing:.12em; text-transform:uppercase; margin-bottom:.55rem; }
+    .hero { background:linear-gradient(125deg,#eff8f8 0%,#f7fafc 100%); border:1px solid #d7e8e8; border-radius:18px; padding:1.55rem 1.8rem; margin-bottom:1.4rem; }
+    .hero-title { color:var(--ink); font-size:1.75rem; font-weight:760; line-height:1.18; letter-spacing:-.035em; margin-bottom:.55rem; }
+    .hero-copy { color:#405b6d; max-width:48rem; line-height:1.55; margin:0; }
+    .steps { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:.8rem; margin:0 0 1.3rem; }
+    .step { background:#fff; border:1px solid var(--line); border-radius:12px; padding:.85rem 1rem; color:#405b6d; font-size:.85rem; line-height:1.4; }
+    .step strong { display:block; color:var(--ink); font-size:.94rem; margin-bottom:.22rem; }
+    .step-number { color:var(--teal); font-weight:800; margin-right:.35rem; }
+    .safety-bar { border:1px solid #f2d6a8; border-left:4px solid #b65d18; border-radius:9px; background:#fff9ed; color:#513c20; padding:.85rem 1rem; margin:.8rem 0 1.15rem; line-height:1.5; }
+    .result-ready, .result-review, .result-retake { border-radius:10px; padding:1rem 1.1rem; line-height:1.55; }
+    .result-ready { border:1px solid #b9ded5; border-left:4px solid #0f766e; background:#effaf6; color:#184d47; }
+    .result-review { border:1px solid #f0dcb1; border-left:4px solid #ba7117; background:#fffaf0; color:#593e1e; }
+    .result-retake { border:1px solid #f0c9c6; border-left:4px solid #b94138; background:#fff4f2; color:#632d2a; }
     .plain-note { color:var(--muted); font-size:.92rem; }
-    [data-testid="stMetric"] { border-top: 2px solid #d7e3e1; padding-top: .65rem; }
-    [data-testid="stSidebar"] { background:#f7faf9; }
-    [data-testid="stFileUploaderDropzone"] { min-height: 7rem; }
-    video { width:100% !important; height:auto !important; border-radius:6px; }
+    [data-testid="stMetric"] { background:#f7fafb; border:1px solid var(--line); border-radius:11px; padding:.8rem 1rem; }
+    [data-testid="stSidebar"] { background:#f5f9fa; border-right:1px solid var(--line); }
+    [data-testid="stFileUploaderDropzone"] { min-height: 7rem; border:1.5px dashed #9db9be; border-radius:10px; background:#f9fcfc; }
+    [data-testid="stForm"], [data-testid="stVerticalBlockBorderWrapper"] { border-radius:14px; }
+    video { width:100% !important; height:auto !important; border-radius:10px; }
     iframe { max-width:100%; }
-    .stButton > button, .stDownloadButton > button { border-radius:6px; min-height:2.65rem; }
-    @media (prefers-color-scheme: dark) {
-      h1, h2, h3, .brand { color:#f4f7f6; }
-      .brand-sub, .plain-note { color:#b4c0bc; }
-      .safety-bar { background:#422006; }
-      .result-ready { background:#052e2b; }
-      .result-review { background:#422006; }
-      .result-retake { background:#450a0a; }
-      [data-testid="stSidebar"] { background:#111917; }
-    }
+    .stButton > button, .stDownloadButton > button { border-radius:9px; min-height:2.7rem; font-weight:650; }
     @media (max-width: 720px) {
       .block-container { padding: .8rem .9rem 2rem; }
       h1 { font-size:1.55rem !important; line-height:1.25; }
@@ -106,6 +107,10 @@ st.markdown(
       [data-testid="stMetricValue"] { font-size:1.35rem; }
       [data-testid="stFileUploaderDropzoneInstructions"] span { font-size:.84rem; }
       .stButton > button, .stDownloadButton > button { width:100%; }
+      .hero { padding:1.2rem; border-radius:14px; }
+      .hero-title { font-size:1.4rem; }
+      .steps { grid-template-columns:1fr; gap:.45rem; }
+      .step { padding:.65rem .8rem; }
     }
     </style>
     """,
@@ -628,6 +633,21 @@ def render_patient_result(case, language):
 
 def analyze_page(settings, language):
     st.header("Review a medical image", anchor=False)
+    st.markdown(
+        '<div class="hero"><div class="eyebrow">ProbStrip / Image review</div>'
+        '<div class="hero-title">A clearer path from image to report</div>'
+        '<p class="hero-copy">Select the image type, check the preview, and create a '
+        'plain-language screening report you can share with a clinician.</p></div>',
+        unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div class="steps">'
+        '<div class="step"><strong><span class="step-number">01</span> Choose</strong>Select the image type that matches your file.</div>'
+        '<div class="step"><strong><span class="step-number">02</span> Check</strong>Upload a clear image and review its preview.</div>'
+        '<div class="step"><strong><span class="step-number">03</span> Review</strong>Read the result and download the PDF.</div>'
+        '</div>',
+        unsafe_allow_html=True,
+    )
     category = st.selectbox(
         "What kind of image are you reviewing?",
         [
@@ -654,17 +674,20 @@ def analyze_page(settings, language):
         unsafe_allow_html=True,
     )
 
-    with st.form("scan-form", clear_on_submit=False):
+    with st.container(border=True):
         uploaded = st.file_uploader(
             "Upload my image",
             type=["png", "jpg", "jpeg", "tif", "tiff"],
             help="Upload a retinal photograph or medical scan centered and in focus.",
         )
+        if uploaded is not None:
+            st.image(uploaded, caption="Image preview — check focus and orientation", width=340)
         consent = st.checkbox(
             "I understand this is vessel screening and urgent vision symptoms require medical attention."
         )
-        submitted = st.form_submit_button(
-            "Check image and create report", type="primary", width="stretch"
+        submitted = st.button(
+            "Check image and create report", type="primary", width="stretch",
+            disabled=uploaded is None,
         )
 
     if submitted:
@@ -826,6 +849,8 @@ def general_imaging_page(modality):
             key="general-imaging-upload",
             help="Use a de-identified PNG, JPEG, or TIFF export. DICOM is not supported in this release.",
         )
+    if media is not None:
+        st.image(media, caption="Image preview — confirm this matches the selected image type", width=340)
 
     with st.expander("Image display controls"):
         control_a, control_b = st.columns(2)
